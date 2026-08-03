@@ -64,6 +64,20 @@ def test_configured_when_a_key_is_present(monkeypatch):
     assert routestack.is_configured() is True
 
 
+@pytest.mark.parametrize("placeholder", ["PASTE_HERE", "paste_here", "rst_...", "changeme", "TODO"])
+def test_unreplaced_placeholders_do_not_count_as_configured(placeholder, monkeypatch):
+    """A fresh .env ships placeholders; treating one as a key sends
+    `Bearer PASTE_HERE` upstream to learn what was knowable locally."""
+    monkeypatch.setenv("ROUTESTACK_API_KEY", placeholder)
+    assert routestack.is_configured() is False
+
+
+def test_placeholder_secret_is_not_sent_as_a_header(monkeypatch):
+    monkeypatch.setenv("ROUTESTACK_API_KEY", "rst_real")
+    monkeypatch.setenv("ROUTESTACK_API_SECRET", "PASTE_HERE")
+    assert "x-api-secret" not in routestack._headers()
+
+
 def test_credentials_travel_in_headers_not_the_body(monkeypatch):
     """A key in a request body ends up in logs and caches. Headers only."""
     monkeypatch.setenv("ROUTESTACK_API_KEY", "rst_secret")

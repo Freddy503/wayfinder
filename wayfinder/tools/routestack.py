@@ -29,9 +29,17 @@ DEFAULT_URL = "https://mcp.routestack.ai/mcp"
 PROTOCOL_VERSION = "2025-06-18"
 
 
+#: Values that mean "not filled in yet". An unreplaced placeholder is the most
+#: likely content of this variable on a fresh checkout, and treating it as a
+#: real key sends `Bearer PASTE_HERE` upstream and burns a call to learn what
+#: was knowable locally.
+_PLACEHOLDERS = {"paste_here", "changeme", "todo", "rst_...", "your_key_here", "xxx"}
+
+
 def is_configured() -> bool:
-    """True when a RouteStack key is present in the environment."""
-    return bool(os.environ.get("ROUTESTACK_API_KEY", "").strip())
+    """True when a usable RouteStack key is present in the environment."""
+    key = os.environ.get("ROUTESTACK_API_KEY", "").strip()
+    return bool(key) and key.lower() not in _PLACEHOLDERS
 
 
 def _endpoint() -> str:
@@ -49,10 +57,10 @@ def _headers() -> dict[str, str]:
         headers["authorization"] = f"Bearer {key}"
         headers["x-api-key"] = key
     secret = os.environ.get("ROUTESTACK_API_SECRET", "").strip()
-    if secret:
+    if secret and secret.lower() not in _PLACEHOLDERS:
         headers["x-api-secret"] = secret
     account = os.environ.get("ROUTESTACK_ACCOUNT_ID", "").strip()
-    if account:
+    if account and account.lower() not in _PLACEHOLDERS:
         headers["x-account-id"] = account
     return headers
 
