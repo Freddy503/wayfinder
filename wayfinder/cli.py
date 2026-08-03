@@ -230,6 +230,10 @@ def eval_command(
     ] = 1,
     judges: Annotated[bool, typer.Option(help="Include the LLM judges.")] = True,
     concurrency: Annotated[int, typer.Option(help="Parallel cases.")] = 4,
+    case: Annotated[
+        list[str] | None,
+        typer.Option("--case", help="Repeat to run only these cases. Default: all 20."),
+    ] = None,
 ) -> None:
     """Run one experiment arm over the dataset and report it to LangSmith."""
     _load_env()
@@ -241,7 +245,14 @@ def eval_command(
 
     config = EXPERIMENT_MATRIX[arm]
     _preflight(config.model, needs_langsmith=True)
-    console.print(f"[bold]{arm}[/] · {config.label()} · {repetitions}x")
+
+    runs = (len(case) if case else 20) * repetitions
+    scope = f"{len(case)} case(s)" if case else "all 20 cases"
+    console.print(
+        f"[bold]{arm}[/] · {config.label()} · {scope} × {repetitions} = "
+        f"[bold]{runs} agentic run(s)[/]{'' if judges else ' · no judges'}"
+    )
+
     results = run_experiment(
         config,
         experiment_prefix=arm,
@@ -249,6 +260,7 @@ def eval_command(
         repetitions=repetitions,
         use_judges=judges,
         max_concurrency=concurrency,
+        cases=case,
     )
     console.print(results)
 

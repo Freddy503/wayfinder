@@ -37,6 +37,15 @@ from wayfinder.schema import (
 
 Severity = Literal["hard", "soft"]
 
+#: Wheels-down to standing outside the terminal: taxi in, deplane, immigration,
+#: bags. Before the airport transfer even begins.
+DEPLANE_MINUTES = 45
+
+#: Recommended check-in for an international departure. Deliberately generous —
+#: the failure this guards against (missing the flight) is unrecoverable, while
+#: the cost of being wrong is an hour of airport café.
+CHECKIN_MINUTES = 120
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -119,6 +128,12 @@ def _minutes(t) -> int:
     return t.hour * 60 + t.minute
 
 
+def _fmt(minutes: int) -> str:
+    """Minutes-since-midnight back to HH:MM, tolerating spill past midnight."""
+    minutes = max(0, minutes)
+    return f"{minutes // 60 % 24:02d}:{minutes % 60:02d}"
+
+
 def _where(day: Day, item: Item | None = None) -> str:
     if item is None:
         return day.date.isoformat()
@@ -169,9 +184,14 @@ def check_itinerary(spec: TripSpec, itinerary: Itinerary) -> ConstraintReport:
     checks.append(_check_mobility(spec, itinerary, metrics))
     checks.append(_check_free_block(spec, itinerary))
     checks.append(_check_pace(spec, itinerary))
+    checks.append(_check_flights_present(spec, itinerary, metrics))
+    checks.append(_check_flight_alignment(spec, itinerary))
+    checks.append(_check_arrival_realism(spec, itinerary))
+    checks.append(_check_departure_realism(spec, itinerary))
     checks.append(_check_grounded(itinerary, metrics))
     checks.append(_check_duplicates(itinerary))
     checks.append(_check_hours_known(itinerary))
+    checks.append(_check_flights_grounded(itinerary))
 
     violations = [v for c in checks for v in c.violations]
     hard = [c for c in checks if c.severity == "hard" and not c.skipped]
@@ -293,7 +313,16 @@ def _check_chronology(itin: Itinerary) -> CheckResult:
 
 def _check_budget(spec: TripSpec, itin: Itinerary, metrics: dict[str, float]) -> CheckResult:
     result = CheckResult("budget", "hard")
-    total = itin.total_cost()
+    # Flights count unless the traveller said they're handling them. A trip
+    # that fits only because the airfare wasn't counted doesn't fit.
+    counts_flights = not any(
+        "flight" in exclusion.lower() for exclusion in spec.budget.excludes
+    )
+    ground = itin.total_cost()
+    air = itin.flight_cost() if counts_flights else 0.0
+    total = ground + air
+    metrics["ground_cost"] = round(ground, 2)
+    metrics["flight_cost"] = round(itin.flight_cost(), 2)
     cap = spec.budget.total
     metrics["total_cost"] = round(total, 2)
     metrics["budget_overrun_pct"] = round(max(0.0, (total - cap) / cap), 4)
@@ -549,6 +578,139 @@ def _check_pace(spec: TripSpec, itin: Itinerary) -> CheckResult:
                     f"{count} activities against a ceiling of {ceiling} "
                     f"({'stated' if explicit else spec.pace + ' pace'})",
                     _where(day),
+                )
+            )
+    return result
+
+
+def _check_flights_present(
+    spec: TripSpec, itin: Itinerary, metrics: dict[str, float]
+) -> CheckResult:
+    """Both legs must exist once an origin is given."""
+    result = CheckResult("flights_present", "hard", skipped=spec.origin is None)
+    if result.skipped:
+        metrics["flights_planned"] = 1.0 if itin.flights else 0.0
+        return result
+    for direction in ("outbound", "return"):
+        if itin.flight(direction) is None:
+            result.violations.append(
+                Violation(
+                    "flights_present",
+                    "hard",
+                    f"no {direction} flight from {spec.origin}",
+                )
+            )
+    metrics["flights_planned"] = 0.0 if result.violations else 1.0
+    return result
+
+
+def _check_flight_alignment(spec: TripSpec, itin: Itinerary) -> CheckResult:
+    """The outbound has to land by day one; the return can't leave before the end."""
+    result = CheckResult("flight_alignment", "hard", skipped=spec.origin is None)
+    if result.skipped:
+        return result
+    first, last = spec.dates.start, spec.dates.end
+
+    outbound = itin.flight("outbound")
+    if outbound and outbound.arrival_date > first:
+        result.violations.append(
+            Violation(
+                "flight_alignment",
+                "hard",
+                f"outbound lands {outbound.arrival_date} but the trip starts {first}",
+            )
+        )
+    ret = itin.flight("return")
+    if ret and ret.date < last:
+        result.violations.append(
+            Violation(
+                "flight_alignment",
+                "hard",
+                f"return departs {ret.date} but the trip runs to {last}",
+            )
+        )
+    return result
+
+
+def _check_arrival_realism(spec: TripSpec, itin: Itinerary) -> CheckResult:
+    """Nothing on the arrival day may start before the traveller can be there.
+
+    The most common way a plausible-looking itinerary is wrong: sightseeing
+    scheduled for 09:00 on a day the aircraft lands at 11:30.
+    """
+    outbound = itin.flight("outbound")
+    result = CheckResult(
+        "arrival_realism", "hard", skipped=spec.origin is None or outbound is None
+    )
+    if result.skipped or outbound is None:
+        return result
+
+    ready = (
+        _minutes(outbound.arrive_time) + DEPLANE_MINUTES + spec.airport_transfer_minutes
+    )
+    for day in itin.days:
+        if day.date != outbound.arrival_date:
+            continue
+        for item in day.items:
+            # A leg of the journey itself may legitimately overlap the buffer.
+            if item.kind in ("transit", "travel"):
+                continue
+            if _minutes(item.start) < ready:
+                result.violations.append(
+                    Violation(
+                        "arrival_realism",
+                        "hard",
+                        f"starts {item.start:%H:%M}, but the flight lands "
+                        f"{outbound.arrive_time:%H:%M} and the traveller cannot be "
+                        f"in the city before {_fmt(ready)} "
+                        f"({DEPLANE_MINUTES} min to clear the airport + "
+                        f"{spec.airport_transfer_minutes} min transfer)",
+                        _where(day, item),
+                    )
+                )
+    return result
+
+
+def _check_departure_realism(spec: TripSpec, itin: Itinerary) -> CheckResult:
+    """Nothing may run past the moment the traveller has to leave for the airport."""
+    ret = itin.flight("return")
+    result = CheckResult(
+        "departure_realism", "hard", skipped=spec.origin is None or ret is None
+    )
+    if result.skipped or ret is None:
+        return result
+
+    leave_by = _minutes(ret.depart_time) - CHECKIN_MINUTES - spec.airport_transfer_minutes
+    for day in itin.days:
+        if day.date != ret.date:
+            continue
+        for item in day.items:
+            if item.kind in ("transit", "travel"):
+                continue
+            if _minutes(item.end) > leave_by:
+                result.violations.append(
+                    Violation(
+                        "departure_realism",
+                        "hard",
+                        f"runs to {item.end:%H:%M}, but the flight leaves "
+                        f"{ret.depart_time:%H:%M} and the traveller must set off by "
+                        f"{_fmt(leave_by)} ({spec.airport_transfer_minutes} min transfer "
+                        f"+ {CHECKIN_MINUTES} min check-in)",
+                        _where(day, item),
+                    )
+                )
+    return result
+
+
+def _check_flights_grounded(itin: Itinerary) -> CheckResult:
+    result = CheckResult("flights_grounded", "soft", skipped=not itin.flights)
+    for flight in itin.flights:
+        if not flight.sources:
+            result.violations.append(
+                Violation(
+                    "flights_grounded",
+                    "soft",
+                    f"{flight.direction} flight has no source for its times or price",
                 )
             )
     return result

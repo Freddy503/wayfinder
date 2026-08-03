@@ -285,10 +285,15 @@
     must_do: [Acropolis]
     soft_preferences: [one day between flights, keep it near the centre]
 
+# The arrival/departure times used to live in `soft_preferences` as free text,
+# which meant nothing could check them. With an origin they become flights, and
+# the first and last day are held to the aircraft.
 - name: vienna-late-arrival
   category: edge
   spec:
     destination: Vienna, Austria
+    origin: Hamburg, Germany
+    airport_transfer_minutes: 40
     dates: {start: 2026-03-13, end: 2026-03-15}
     party: {adults: 2}
     budget: {currency: EUR, total: 650, excludes: [flights, accommodation]}
@@ -296,5 +301,38 @@
     constraints:
       required_meals: [dinner]
     soft_preferences:
-      - we land at 19:00 on the first day and fly out at 11:00 on the last
+      - an evening arrival on day one and an early flight out on the last day
       - coffee houses, one concert if the timing works
+
+- name: lisbon-with-flights
+  category: flights
+  spec:
+    destination: Lisbon, Portugal
+    origin: Berlin, Germany
+    airport_transfer_minutes: 45
+    dates: {start: 2026-10-12, end: 2026-10-15}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 1400, excludes: [accommodation]}
+    pace: relaxed
+    constraints:
+      required_meals: [dinner]
+    soft_preferences: [viewpoints over museums, neighbourhood restaurants]
+    must_do: [Time Out Market]
+    dietary: [pescatarian]
+
+# Airfare alone eats most of the cap, so the only correct answer is to say the
+# trip cannot be done at this budget — a refusal that only surfaces once
+# flights are priced into it.
+- name: tokyo-flights-impossible
+  category: infeasible
+  should_refuse: true
+  spec:
+    destination: Tokyo, Japan
+    origin: Lisbon, Portugal
+    dates: {start: 2026-04-02, end: 2026-04-06}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 700, excludes: []}
+    pace: standard
+    constraints:
+      required_meals: [dinner]
+    must_do: [Senso-ji]

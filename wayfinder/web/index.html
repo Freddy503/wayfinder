@@ -253,6 +253,14 @@
         <label>Destination</label>
         <input id="f-dest" placeholder="Lisbon, Portugal">
         <div class="row">
+          <div><label>Flying from <span class="hint" style="display:inline">optional</span></label>
+            <input id="f-origin" placeholder="Berlin, Germany"></div>
+          <div><label>Airport transfer (min)</label>
+            <input id="f-transfer" type="number" min="5" placeholder="45"></div>
+        </div>
+        <div class="hint">Set an origin and the agent plans flights — and the first
+          and last day get checked against them.</div>
+        <div class="row">
           <div><label>From</label><input id="f-start" type="date"></div>
           <div><label>To</label><input id="f-end" type="date"></div>
         </div>
@@ -415,6 +423,8 @@ function specFromForm() {
 
   const spec = {
     destination: $("f-dest").value.trim(),
+    ...($("f-origin").value.trim() ? { origin: $("f-origin").value.trim() } : {}),
+    ...($("f-transfer").value ? { airport_transfer_minutes: +$("f-transfer").value } : {}),
     dates: { start: $("f-start").value, end: $("f-end").value },
     party: { adults: +$("f-adults").value || 2, children: +$("f-children").value || 0 },
     budget: { currency: ($("f-currency").value || "EUR").toUpperCase(), total: +$("f-budget").value },
@@ -431,6 +441,8 @@ function specFromForm() {
 
 function fillForm(s) {
   $("f-dest").value = s.destination || "";
+  $("f-origin").value = s.origin || "";
+  $("f-transfer").value = s.airport_transfer_minutes || "";
   $("f-start").value = s.dates?.start || ""; $("f-end").value = s.dates?.end || "";
   $("f-adults").value = s.party?.adults ?? 2; $("f-children").value = s.party?.children ?? 0;
   $("f-budget").value = s.budget?.total ?? 900; $("f-currency").value = s.budget?.currency || "EUR";
@@ -886,10 +898,40 @@ function selectDay(idx) {
 }
 
 let journeyData = null;
+function flightCard(f) {
+  const card = el("div", "jcard");
+  card.style.borderStyle = "dashed";
+  card.append(el("div", "when",
+    `${f.depart_time}–${f.arrive_time}${f.arrives_next_day ? " +1" : ""}`));
+  card.append(el("div", "title",
+    `${f.direction === "outbound" ? "✈ Arrive" : "✈ Depart"} · ${f.origin_airport} → ${f.destination_airport}`));
+  const carrier = [f.airline, f.flight_number].filter(Boolean).join(" ");
+  if (carrier || f.note) card.append(el("div", "note", f.note || carrier));
+  const chips = el("div", "chips");
+  chips.append(el("span", "chip", f.stops === 0 ? "direct" : `${f.stops} stop`));
+  if (f.estimated_cost) chips.append(el("span", "chip cost",
+    `${f.estimated_cost} ${journeyData.currency}`));
+  card.append(chips);
+  if (f.sources?.length) {
+    const a = el("a", null, "source ↗"); a.href = f.sources[0]; a.target = "_blank";
+    card.append(a);
+  }
+  return card;
+}
+
 function renderCards(dayIdx) {
   const row = $("cardrow"); row.innerHTML = "";
   const day = journeyData.days[dayIdx];
   const color = DAY_COLORS[dayIdx % DAY_COLORS.length];
+
+  // Flights bracket the trip: the inbound opens the first day, the outbound
+  // closes the last. Showing them inline is what makes the buffer visible.
+  const flights = journeyData.flights || [];
+  const arriving = flights.find(f =>
+    f.direction === "outbound" && (f.arrives_next_day
+      ? new Date(f.date + "T12:00").getTime() + 864e5 === new Date(day.date + "T12:00").getTime()
+      : f.date === day.date));
+  if (arriving) row.append(flightCard(arriving));
   day.items.forEach((item, i) => {
     const leg = item.transit_from_previous;
     if (leg) {
@@ -928,6 +970,10 @@ function renderCards(dayIdx) {
     row.append(card);
     void color;
   });
+
+  const departing = (journeyData.flights || []).find(
+    f => f.direction === "return" && f.date === day.date);
+  if (departing) row.append(flightCard(departing));
 }
 
 function renderJourney(itin) {
@@ -1024,7 +1070,44 @@ function buildPrintable() {
 
   if (journeyData.notes) host.append(el("div", "pr-note", journeyData.notes));
 
-  let grandCost = 0;
+  const flights = journeyData.flights || [];
+  let airCost = 0;
+  if (flights.length) {
+    const block = el("div", "pr-day");
+    block.append(el("div", "pr-dayh", "Flights"));
+    const table = el("table", "pr");
+    const head = el("tr");
+    ["Leg", "Route", "Times", "Cost"].forEach(h => head.append(el("th", null, h)));
+    table.append(head);
+    flights
+      .slice()
+      .sort((a, b) => (a.direction === "outbound" ? -1 : 1))
+      .forEach(f => {
+        airCost += f.estimated_cost || 0;
+        const tr = el("tr");
+        tr.append(el("td", null, f.direction));
+        const route = el("td");
+        route.append(el("div", "pr-title", `${f.origin_airport} → ${f.destination_airport}`));
+        const meta = [new Date(f.date + "T12:00").toLocaleDateString(),
+                      [f.airline, f.flight_number].filter(Boolean).join(" "),
+                      f.stops === 0 ? "direct" : `${f.stops} stop`].filter(Boolean).join(" · ");
+        route.append(el("div", "pr-meta", meta));
+        if (f.note) route.append(el("div", "pr-meta", f.note));
+        tr.append(route);
+        tr.append(el("td", "pr-when",
+          `${f.depart_time}–${f.arrive_time}${f.arrives_next_day ? " +1" : ""}`));
+        tr.append(el("td", null, f.estimated_cost
+          ? `${f.estimated_cost} ${journeyData.currency}` : "—"));
+        table.append(tr);
+      });
+    block.append(table);
+    block.append(el("div", "pr-totals",
+      `Airfare ${airCost.toFixed(0)} ${journeyData.currency} · times and fares are ` +
+      `indicative, gathered from public sources — nothing is booked`));
+    host.append(block);
+  }
+
+  let grandCost = airCost;
   days.forEach((day, di) => {
     const block = el("div", "pr-day");
     block.append(el("div", "pr-dayh", fmtDate(day.date)));
@@ -1096,6 +1179,7 @@ function buildPrintable() {
     (i.sources || []).forEach(s => sources.add(s));
     if (i.venue?.rating?.source) sources.add(i.venue.rating.source);
   }));
+  flights.forEach(f => (f.sources || []).forEach(s => sources.add(s)));
   if (sources.size) {
     foot.append(el("div", null, " "));
     foot.append(el("div", null, "Sources:"));

@@ -61,9 +61,18 @@ def make_target(config: AgentConfig, runs_root: Path | None = None):
             markdown = render_markdown(spec, result.itinerary, result.report)
             sources = render_sources(result.itinerary)
 
+        tool_calls = result.tool_calls()
         return {
             "passed": result.report.passed,
             "check_calls": result.check_calls,
+            # Effort, so the matrix can compare arms on work done and not just
+            # on quality — which saturates at 1.0 on anything easy.
+            "tool_calls": sum(tool_calls.values()),
+            "tool_breakdown": tool_calls,
+            "verification_calls": sum(
+                n for t, n in tool_calls.items()
+                if t in ("geocode", "venue_rating", "estimate_travel")
+            ),
             "error": result.error,
             "run_dir": str(result.run_dir),
             # Metrics and violations only — the full itinerary would balloon
@@ -80,6 +89,28 @@ def make_target(config: AgentConfig, runs_root: Path | None = None):
     return target
 
 
+def select_examples(client: Client, dataset_name: str, names: list[str]) -> list[Any]:
+    """Pick named examples out of the dataset.
+
+    The cost lever. A full sweep is 20 agentic runs per repetition; most
+    questions worth asking early — does the pipeline work, what is the noise
+    floor — are answerable on a handful of well-chosen cases for a fraction of
+    the spend.
+    """
+    wanted = set(names)
+    examples = [
+        e
+        for e in client.list_examples(dataset_name=dataset_name)
+        if (e.metadata or {}).get("name") in wanted
+    ]
+    found = {(e.metadata or {}).get("name") for e in examples}
+    missing = wanted - found
+    if missing:
+        msg = f"no such case(s) in {dataset_name!r}: {sorted(missing)}"
+        raise KeyError(msg)
+    return examples
+
+
 def run_experiment(
     config: AgentConfig,
     *,
@@ -88,18 +119,27 @@ def run_experiment(
     repetitions: int = 1,
     use_judges: bool = True,
     max_concurrency: int = 4,
+    cases: list[str] | None = None,
     client: Client | None = None,
     runs_root: Path | None = None,
 ) -> Any:
     client = client or Client()
+    data: Any = (
+        select_examples(client, dataset_name, cases) if cases else dataset_name
+    )
     return client.evaluate(
         make_target(config, runs_root=runs_root),
-        data=dataset_name,
+        data=data,
         evaluators=build_evaluators(use_judges=use_judges),
         experiment_prefix=experiment_prefix,
         num_repetitions=repetitions,
         max_concurrency=max_concurrency,
-        metadata={"wayfinder_config": config.label(), **_config_metadata(config)},
+        metadata={
+            "wayfinder_config": config.label(),
+            "judges": use_judges,
+            "cases": ",".join(cases) if cases else "all",
+            **_config_metadata(config),
+        },
     )
 
 

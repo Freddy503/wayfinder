@@ -32,15 +32,42 @@ def _metrics(outputs: dict[str, Any]) -> dict[str, float]:
     return (outputs or {}).get("report", {}).get("metrics", {}) or {}
 
 
+def produced_output(outputs: dict[str, Any]) -> bool:
+    """Did this run produce a validated itinerary at all?
+
+    The distinction that matters for every "absence is good" metric below.
+    A crashed run has no budget to overrun and no infeasible transit legs —
+    which naively scores as perfect budget adherence and perfect transit
+    feasibility. An arm that crashed on every case would top those columns.
+
+    A declared-infeasible run *is* real output: it parsed, it reached a
+    decision, and having no costs to check is the correct outcome rather than
+    a missing one. So the gate is schema validity, not the presence of days.
+    """
+    return _metrics(outputs).get("schema_valid") == 1.0
+
+
 def _from_metric(
     key: str,
     feedback_key: str,
     default: float = 0.0,
     transform: Callable[[float], float] | None = None,
+    requires_output: bool = False,
 ) -> Callable[..., dict[str, Any]]:
-    """Lift one of `verify.py`'s metrics into a LangSmith evaluator."""
+    """Lift one of `verify.py`'s metrics into a LangSmith evaluator.
+
+    Set `requires_output` on any metric where a *missing* value would read as
+    a good score. Those return 0.0 for a run that produced nothing, so a crash
+    is never mistaken for success.
+    """
 
     def evaluator(inputs: dict, outputs: dict, **_: Any) -> dict[str, Any]:
+        if requires_output and not produced_output(outputs):
+            return {
+                "key": feedback_key,
+                "score": 0.0,
+                "comment": "no itinerary produced — not scoreable",
+            }
         value = _metrics(outputs).get(key, default)
         return {"key": feedback_key, "score": transform(value) if transform else value}
 
@@ -62,12 +89,16 @@ grounded_pct = _from_metric("grounded_pct", "grounded_pct")
 #: directions in one experiment view is how you end up reading a regression as
 #: an improvement.
 budget_respected = _from_metric(
-    "budget_overrun_pct", "budget_respected", transform=lambda v: max(0.0, 1.0 - v)
+    "budget_overrun_pct",
+    "budget_respected",
+    transform=lambda v: max(0.0, 1.0 - v),
+    requires_output=True,
 )
 transit_feasible = _from_metric(
     "transit_infeasibility_count",
     "transit_feasible",
     transform=lambda v: 1.0 if v == 0 else 0.0,
+    requires_output=True,
 )
 
 
@@ -84,8 +115,19 @@ def correctly_refused(
     Scored on every case, not just the impossible ones — otherwise an agent
     that refuses everything would score perfectly on the infeasible subset and
     never be penalised for it.
+
+    A run that produced no itinerary scores 0.0 regardless of the reference.
+    Without that guard a crash reads as a deliberate decision: on a solvable
+    spec, "didn't refuse" was trivially true of a run that never got far
+    enough to refuse anything, and it collected full marks for it.
     """
     expected = bool((reference_outputs or {}).get("should_refuse", False))
+    if not produced_output(outputs):
+        return {
+            "key": "correctly_refused",
+            "score": 0.0,
+            "comment": "no itinerary produced — the run failed rather than deciding",
+        }
     actual = _metrics(outputs).get("refused", 0.0) == 1.0
     if expected == actual:
         comment = "refused as expected" if expected else "planned as expected"
@@ -94,6 +136,29 @@ def correctly_refused(
     else:
         comment = "refused a spec that was satisfiable"
     return {"key": "correctly_refused", "score": float(expected == actual), "comment": comment}
+
+
+def tool_calls(inputs: dict, outputs: dict, **_: Any) -> dict[str, Any]:
+    """Total tool calls. Diagnostic — effort, not quality.
+
+    The column that made the 4.3x wall-clock spread legible: two runs both
+    scoring a perfect 1.0 did 55 and 145 tool calls respectively. Where
+    quality saturates, this is the only thing left that can separate arms.
+    """
+    return {"key": "tool_calls", "score": float((outputs or {}).get("tool_calls", 0))}
+
+
+def verification_calls(inputs: dict, outputs: dict, **_: Any) -> dict[str, Any]:
+    """Calls to the expensive verifiers — geocode, ratings, travel estimates.
+
+    Tracked apart from `tool_calls` because this is the number the
+    shortlist-before-you-verify instruction is meant to move: searching wide is
+    cheap and good, verifying candidates you then discard is neither.
+    """
+    return {
+        "key": "verification_calls",
+        "score": float((outputs or {}).get("verification_calls", 0)),
+    }
 
 
 def check_calls(inputs: dict, outputs: dict, **_: Any) -> dict[str, Any]:
@@ -116,6 +181,8 @@ CODE_EVALUATORS = [
     grounded_pct,
     correctly_refused,
     check_calls,
+    tool_calls,
+    verification_calls,
 ]
 
 

@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 Pace = Literal["relaxed", "standard", "packed"]
+FlightDirection = Literal["outbound", "return"]
 ItemKind = Literal["activity", "meal", "transit", "rest", "travel"]
 MealSlot = Literal["breakfast", "lunch", "dinner"]
 TransitMode = Literal["walk", "transit", "taxi", "bike", "other"]
@@ -128,6 +129,13 @@ class TripSpec(_Model):
     """What the traveller wants. The agent's input; the checker's yardstick."""
 
     destination: str
+    #: Where the traveller flies from. Set it and the agent plans flights and
+    #: checks the first and last day against them; leave it unset and the trip
+    #: is planned as if they are already in the city.
+    origin: str | None = None
+    #: Door-to-door time between the arrival airport and the city, each way.
+    #: Feeds the arrival- and departure-day realism checks.
+    airport_transfer_minutes: int = Field(default=45, gt=0)
     dates: DateRange
     party: Party = Field(default_factory=Party)
     budget: Budget
@@ -262,6 +270,38 @@ class Item(_Model):
         return _minutes(self.end) - _minutes(self.start)
 
 
+class Flight(_Model):
+    """One leg of getting there and back.
+
+    Prices and times are researched from public sources, never booked. The
+    point of holding them in the schema is that the first and last day can then
+    be checked against reality: a plan that starts sightseeing before the
+    aircraft lands is the single most common way an itinerary is quietly wrong.
+    """
+
+    direction: FlightDirection
+    date: date
+    depart_time: time
+    arrive_time: time
+    #: Red-eyes and long-hauls land the following day; without this the
+    #: arrival check would read a 06:00 landing as eighteen hours early.
+    arrives_next_day: bool = False
+    origin_airport: str = Field(min_length=1, description="IATA code or airport name.")
+    destination_airport: str = Field(min_length=1)
+    airline: str | None = None
+    flight_number: str | None = None
+    stops: int = Field(default=0, ge=0)
+    estimated_cost: float = Field(
+        default=0.0, ge=0, description="Whole party, in the itinerary's currency."
+    )
+    sources: list[str] = Field(default_factory=list)
+    note: str | None = None
+
+    @property
+    def arrival_date(self) -> date:
+        return date.fromordinal(self.date.toordinal() + 1) if self.arrives_next_day else self.date
+
+
 class Day(_Model):
     date: date
     items: list[Item] = Field(default_factory=list)
@@ -279,9 +319,19 @@ class Itinerary(_Model):
     destination: str
     currency: str = Field(min_length=3, max_length=3)
     days: list[Day] = Field(default_factory=list)
+    flights: list[Flight] = Field(default_factory=list)
     feasible: bool = True
     infeasibility_reason: str | None = None
     notes: str | None = None
+
+    def flight(self, direction: FlightDirection) -> Flight | None:
+        for f in self.flights:
+            if f.direction == direction:
+                return f
+        return None
+
+    def flight_cost(self) -> float:
+        return sum(f.estimated_cost for f in self.flights)
 
     @model_validator(mode="after")
     def _refusal_has_reason(self) -> Itinerary:

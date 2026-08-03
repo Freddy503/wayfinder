@@ -33,7 +33,8 @@ def render_markdown(spec: TripSpec, itin: Itinerary, report: ConstraintReport) -
         ]
         return "\n".join(lines)
 
-    total = itin.total_cost()
+    counts_flights = not any("flight" in e.lower() for e in spec.budget.excludes)
+    total = itin.total_cost() + (itin.flight_cost() if counts_flights else 0.0)
     headroom = spec.budget.total - total
     lines.append(
         f"**Estimated cost** {total:,.0f} {itin.currency} of a "
@@ -46,6 +47,28 @@ def render_markdown(spec: TripSpec, itin: Itinerary, report: ConstraintReport) -
 
     if itin.notes:
         lines += [itin.notes, ""]
+
+    if itin.flights:
+        lines += ["## Flights", ""]
+        for f in sorted(itin.flights, key=lambda x: (x.direction != "outbound", x.date)):
+            carrier = " ".join(x for x in (f.airline, f.flight_number) if x)
+            stops = "direct" if f.stops == 0 else f"{f.stops} stop{'s' if f.stops > 1 else ''}"
+            overnight = " **+1 day**" if f.arrives_next_day else ""
+            cost = f" · {f.estimated_cost:,.0f} {itin.currency}" if f.estimated_cost else ""
+            lines.append(
+                f"- **{f.direction.title()}** {f.date:%a %d %b} · "
+                f"{f.origin_airport} {f.depart_time:%H:%M} → "
+                f"{f.destination_airport} {f.arrive_time:%H:%M}{overnight} · "
+                f"{stops}{' · ' + carrier if carrier else ''}{cost}"
+            )
+            if f.note:
+                lines.append(f"  - {f.note}")
+        lines += [
+            "",
+            "_Flight times and fares are indicative, gathered from public sources. "
+            "Nothing is booked — check live availability before you buy._",
+            "",
+        ]
 
     for day in itin.days:
         lines.append(f"## {day.date:%A %d %B}")
@@ -111,6 +134,9 @@ def render_sources(itin: Itinerary) -> str:
             seen.setdefault(item.venue.rating.source, []).append(
                 f"{item.title} (rating)"
             )
+    for flight in itin.flights:
+        for url in flight.sources:
+            seen.setdefault(url, []).append(f"{flight.direction} flight")
     if not seen:
         lines.append("_No sources were recorded._")
         lines.append("")

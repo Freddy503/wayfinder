@@ -9,6 +9,7 @@ way nothing else will reveal.
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -26,7 +27,15 @@ from wayfinder.evals.evaluators import (
 
 
 def outputs(metrics: dict | None = None, **extra):
-    return {"report": {"metrics": metrics or {}, "violations": []}, **extra}
+    """A run that produced a valid itinerary, unless the test says otherwise.
+
+    `schema_valid` defaults to 1.0 because that is what a real run looks like;
+    the evaluators now treat its absence as "produced nothing", which is the
+    whole point of the crash guard. Tests that want a failed run use
+    `crashed()` instead.
+    """
+    merged = {"schema_valid": 1.0, **(metrics or {})}
+    return {"report": {"metrics": merged, "violations": []}, **extra}
 
 
 # --------------------------------------------------------------------------
@@ -115,9 +124,129 @@ def test_correctly_refused_scores_both_directions(should_refuse, refused, expect
     assert result["comment"]
 
 
+# --------------------------------------------------------------------------
+# A crashed run must never out-score a working one
+#
+# Regression for a real incident: an eval where every run died on a billing
+# 400 still scored `correctly_refused` 0.67, `budget_respected` 1.00 and
+# `transit_feasible` 1.00 — because an absent metric reads as "nothing went
+# wrong". An arm that crashed on every case would have topped those columns.
+# --------------------------------------------------------------------------
+
+
+def crashed():
+    """Exactly what `_missing_itinerary_report` yields for a failed run."""
+    return {
+        "passed": False,
+        "check_calls": 0,
+        "report": {
+            "metrics": {
+                "schema_valid": 0.0,
+                "hard_pass_rate": 0.0,
+                "soft_pass_rate": 0.0,
+                "hard_violation_count": 1.0,
+            },
+            "violations": [],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "evaluator", [budget_respected, transit_feasible, correctly_refused]
+)
+def test_absence_metrics_score_zero_on_a_crashed_run(evaluator):
+    result = evaluator({}, crashed(), reference_outputs={"should_refuse": False})
+    assert result["score"] == 0.0, f"{result['key']} rewarded a run that produced nothing"
+    assert "no itinerary" in result["comment"]
+
+
+def test_crash_on_a_solvable_spec_no_longer_earns_refusal_credit():
+    """The precise 6-of-9 artifact: 'didn't refuse' was true of a dead run."""
+    result = correctly_refused({}, crashed(), reference_outputs={"should_refuse": False})
+    assert result["score"] == 0.0
+
+
+def test_a_real_refusal_still_scores_full_marks():
+    """The guard must not punish a legitimate 'this trip is impossible'."""
+    refused = outputs({"schema_valid": 1.0, "refused": 1.0, "budget_overrun_pct": 0.0,
+                       "transit_infeasibility_count": 0.0}, passed=True)
+    assert correctly_refused({}, refused, reference_outputs={"should_refuse": True})["score"] == 1.0
+    # A refusal has no costs or legs to check; that is correct output, not missing.
+    assert budget_respected({}, refused)["score"] == 1.0
+    assert transit_feasible({}, refused)["score"] == 1.0
+
+
+def test_a_working_plan_is_unaffected():
+    good = outputs({"schema_valid": 1.0, "refused": 0.0, "budget_overrun_pct": 0.2,
+                    "transit_infeasibility_count": 0.0}, passed=True)
+    assert budget_respected({}, good)["score"] == pytest.approx(0.8)
+    assert transit_feasible({}, good)["score"] == 1.0
+    assert correctly_refused({}, good, reference_outputs={"should_refuse": False})["score"] == 1.0
+
+
+def test_a_crashed_arm_cannot_beat_a_working_one_on_any_evaluator():
+    """The property that actually matters for comparing experiment arms."""
+    working = outputs({"schema_valid": 1.0, "refused": 0.0, "hard_pass_rate": 1.0,
+                       "soft_pass_rate": 1.0, "must_do_coverage": 1.0, "grounded_pct": 1.0,
+                       "budget_overrun_pct": 0.0, "transit_infeasibility_count": 0.0},
+                      passed=True, check_calls=1)
+    reference = {"should_refuse": False}
+    for evaluator in CODE_EVALUATORS:
+        dead = evaluator({}, crashed(), reference_outputs=reference)["score"]
+        alive = evaluator({}, working, reference_outputs=reference)["score"]
+        assert dead <= alive, f"{evaluator({}, working, reference_outputs=reference)['key']}: crash scored higher"
+
+
+def test_malformed_output_counts_as_no_output():
+    """Schema failure is the same class of nothing as a crash."""
+    malformed = outputs({"schema_valid": 0.0, "hard_pass_rate": 0.0})
+    assert budget_respected({}, malformed)["score"] == 0.0
+
+
 def test_metrics_pass_through_unchanged():
     assert hard_constraint_pass_rate({}, outputs({"hard_pass_rate": 0.8}))["score"] == 0.8
     assert schema_valid({}, outputs({"schema_valid": 0.0}))["score"] == 0.0
+
+
+def test_effort_metrics_expose_work_done():
+    """Diagnostics, not quality scores — but the only thing that separates two
+    runs that both score a perfect 1.0 while doing 55 and 145 tool calls."""
+    from wayfinder.evals.evaluators import tool_calls, verification_calls
+
+    out = outputs(tool_calls=145, verification_calls=92)
+    assert tool_calls({}, out)["score"] == 145.0
+    assert verification_calls({}, out)["score"] == 92.0
+
+
+def test_effort_metrics_default_to_zero_on_a_crashed_run():
+    from wayfinder.evals.evaluators import tool_calls, verification_calls
+
+    assert tool_calls({}, crashed())["score"] == 0.0
+    assert verification_calls({}, crashed())["score"] == 0.0
+
+
+def test_run_result_counts_tool_calls_from_message_history():
+    """The counter must survive the message shapes LangGraph actually returns."""
+    from langchain_core.messages import AIMessage
+
+    from wayfinder.agent import AgentConfig, RunResult
+    from wayfinder.verify import ConstraintReport
+
+    def call(name, i):
+        return {"name": name, "args": {}, "id": f"c{i}", "type": "tool_call"}
+
+    result = RunResult(
+        run_dir=Path("."), spec=None, config=AgentConfig(),
+        report=ConstraintReport(True, [], [], {}), itinerary=None, payload=None,
+        messages=[
+            AIMessage(content="", tool_calls=[call("geocode", 1), call("web_search", 2)]),
+            AIMessage(content="thinking out loud"),           # no tool calls
+            AIMessage(content="", tool_calls=[call("geocode", 3)]),
+        ],
+    )
+    counts = result.tool_calls()
+    assert counts == {"geocode": 2, "web_search": 1}
+    assert sum(counts.values()) == 3
 
 
 def test_check_calls_is_diagnostic_not_a_score():

@@ -19,6 +19,10 @@ call.
 
 # Workflow
 
+0. **If the spec has an `origin`, settle the flights first** (`flight_search`, \
+once per direction). The outbound landing time and the return departure time \
+decide what the first and last days can contain, and the checker enforces \
+that. Plan the days first and you will replan them.
 1. Plan the work with `write_todos` before you start researching.
 2. Research. When you have research subagents, dispatch **all of them in a \
 single message** — parallel tool calls run concurrently, and sequential \
@@ -26,15 +30,24 @@ dispatch triples the research wall-clock for no quality gain. Write what you \
 learn to files under `research/` as you go — `research/neighborhoods.md`, \
 `research/food.md`, `research/logistics.md`. Keep notes there rather than in \
 your head; you will need the URLs later.
-3. Geocode every venue you intend to schedule (`geocode`) and estimate every \
-move between them (`estimate_travel`) *before* committing to times. Check \
-`venue_rating` for every sight and restaurant you are seriously considering — \
-review scores are a selection criterion, and the traveller sees them on the \
-final itinerary.
-4. Write `itinerary.json`.
-5. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
+3. **Shortlist before you verify.** From the research, decide which venues are \
+actually going into the plan. Searching is cheap; `geocode`, `venue_rating` \
+and `estimate_travel` are not, and verifying candidates you then discard is \
+the single largest source of wasted work. Shortlist to what you intend to \
+schedule plus at most one alternate per slot.
+4. Verify **only the shortlist**: `geocode` each venue, `venue_rating` each \
+sight and restaurant, and `estimate_travel` for each move between consecutive \
+stops. Do this before committing to times. If a shortlisted venue falls \
+through — closed that day, too far — promote its alternate and verify that \
+one; don't re-open the search.
+5. Write `itinerary.json`.
+6. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
 passes, or until you are confident the spec itself is impossible.
-6. Write a short `notes` field summarising the shape of the trip.
+7. Write a short `notes` field summarising the shape of the trip.
+
+A one-day plan needs roughly a dozen verification calls, not fifty. If you \
+find yourself geocoding your twentieth candidate for a single day, you are \
+exploring when you should be deciding.
 
 # The contract
 
@@ -48,6 +61,21 @@ rejected, so do not invent any.
   "feasible": bool,                 # default true
   "infeasibility_reason": str|null, # required when feasible is false
   "notes": str|null,
+  "flights": [{                     # required when the spec has an origin
+    "direction": "outbound"|"return",
+    "date": "YYYY-MM-DD",           # the DEPARTURE date of this leg
+    "depart_time": "HH:MM",
+    "arrive_time": "HH:MM",
+    "arrives_next_day": bool,       # true for red-eyes landing the day after
+    "origin_airport": str,          # IATA or airport name
+    "destination_airport": str,
+    "airline": str|null,
+    "flight_number": str|null,
+    "stops": int,
+    "estimated_cost": number,       # whole party, budget currency, both ways priced separately
+    "sources": [str],
+    "note": str|null                # say plainly that fares are indicative
+  }],
   "days": [{
     "date": "YYYY-MM-DD",
     "summary": str|null,
@@ -97,6 +125,15 @@ Omitting the leg does not make the day fit — it fails the check.
 - **Opening hours.** Record what you actually found. Omit a weekday you \
 couldn't establish; use an empty list for a day the venue is closed. Anything \
 you schedule must sit inside an open window.
+- **Flights.** With an `origin` in the spec, both legs are required. The \
+outbound must land on or before the first day; the return must depart on or \
+after the last day. Airfare counts toward the budget unless the spec excludes \
+flights.
+- **The first and last day are not full days.** After landing, allow 45 \
+minutes to clear the airport plus the spec's `airport_transfer_minutes` before \
+anything can start. Before departing, the traveller must set off \
+`airport_transfer_minutes` + 120 minutes of check-in ahead of the flight — so \
+nothing may run past that. These are hard checks, not advice.
 - **Must-dos.** Every item in `must_do` appears somewhere in the plan.
 - **Time window, meals, walking, downtime.** Respect `earliest_start`, \
 `latest_end`, `required_meals`, `max_walk_km_per_day`, and \

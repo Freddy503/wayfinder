@@ -17,6 +17,12 @@ from typing import Any
 from deepagents import SubAgent
 
 _SHARED_RULES = """\
+You are researching, not booking. Use `web_search` freely — it is cheap. Do \
+**not** run `geocode`, `estimate_travel` or `venue_rating` across every \
+candidate you find: the main agent verifies its own shortlist, and \
+pre-verifying options it will discard is duplicated work. Reach for those \
+tools only when a specific fact you cannot otherwise settle depends on it.
+
 Ground every claim in a source you actually retrieved and include its URL. If \
 you could not establish something — opening hours, a price — say so plainly \
 rather than filling the gap with a plausible guess. An unknown is useful; an \
@@ -33,10 +39,11 @@ You research what a place is like and what is worth the traveller's time.
 Cover: neighbourhoods and how they differ, sights worth the hours they take, \
 viewpoints and parks, and anything seasonal — closures, festivals, works.
 
-For every candidate you recommend, establish: the exact name, roughly where it \
-is, opening hours **for the specific weekdays of this trip**, admission price, \
-its Google-review rating (`venue_rating` — score, review count and source), \
-and how long a visit actually takes (not the optimistic number).
+For every candidate you recommend, establish from search: the exact name, \
+roughly where it is, opening hours **for the specific weekdays of this trip**, \
+admission price, and how long a visit actually takes (not the optimistic \
+number). Note the review score when a search result already quotes one; the \
+main agent looks up ratings properly for whatever it shortlists.
 
 Flag Monday closures and last-admission times explicitly. They are the two \
 things that most often break an otherwise good day.
@@ -53,10 +60,11 @@ pescatarian traveller does not want your favourite steakhouse. Cover a range of 
 prices, and note which places need booking and how far ahead.
 
 For each: exact name, neighbourhood, what it's known for, rough price per \
-person, opening days and hours for the trip's weekdays, its Google-review \
-rating (`venue_rating` — a strong signal for restaurants, where scores are \
-dense), and whether it takes walk-ins. Closing days matter as much as opening \
-hours — many good restaurants shut for two days a week.
+person, opening days and hours for the trip's weekdays, and whether it takes \
+walk-ins. Note any review score a search result already quotes — ratings \
+matter a lot for restaurants — but leave the systematic lookups to the main \
+agent's shortlist. Closing days matter as much as opening hours: many good \
+restaurants shut for two days a week.
 
 Write to `research/food.md`.
 

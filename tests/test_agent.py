@@ -78,6 +78,31 @@ def test_skills_are_staged_into_the_run(spec, run_dir):
         assert f"name: {skill}" in text
 
 
+def test_concurrent_runs_of_one_spec_get_separate_directories(spec, tmp_path):
+    """Regression: two repetitions starting in the same second collided.
+
+    They raced to stage skills into one directory, and would have overwritten
+    each other's itinerary.json — scoring the same plan twice under two
+    different experiment rows. Exactly the configuration an eval uses.
+    """
+    from wayfinder.agent import new_run_dir
+
+    dirs = [new_run_dir(spec, root=tmp_path) for _ in range(12)]
+    assert len({str(d) for d in dirs}) == 12, "run directories must be unique"
+    assert all(d.exists() for d in dirs)
+
+
+def test_parallel_threads_never_share_a_run_directory(spec, tmp_path):
+    """The filesystem, not the clock, has to arbitrate."""
+    import concurrent.futures
+
+    from wayfinder.agent import new_run_dir
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        dirs = list(pool.map(lambda _: new_run_dir(spec, root=tmp_path), range(24)))
+    assert len({str(d) for d in dirs}) == 24
+
+
 def test_config_labels_are_distinct():
     labels = {
         AgentConfig().label(),

@@ -23,6 +23,7 @@ from wayfinder.prompts import MAIN_PROMPT
 from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import Itinerary, TripSpec
 from wayfinder.specs import load_itinerary_payload
+from wayfinder.tools.flights import flight_search
 from wayfinder.tools.geo import estimate_travel, geocode
 from wayfinder.tools.money import fx_convert
 from wayfinder.tools.ratings import venue_rating
@@ -99,6 +100,21 @@ class RunResult:
     error: str | None = None
     check_calls: int = 0
     messages: list[Any] = field(default_factory=list)
+
+    def tool_calls(self) -> dict[str, int]:
+        """How many times each tool was called, from the message history.
+
+        Effort is otherwise invisible to the experiment view: two runs can
+        both score a perfect 1.0 while one did 55 tool calls and the other
+        145. On easy cases — where every quality metric saturates — this is
+        the only column that can still tell two arms apart.
+        """
+        counts: dict[str, int] = {}
+        for message in self.messages:
+            for call in getattr(message, "tool_calls", None) or []:
+                name = call.get("name", "?")
+                counts[name] = counts.get(name, 0) + 1
+        return counts
 
 
 def make_check_tool(spec: TripSpec, run_dir: Path, counter: dict[str, int]):
@@ -234,7 +250,14 @@ def build_agent(
     to persist the graph mid-run so it can be resumed after a human answers.
     The CLI leaves it unset and runs straight through; the server passes one in.
     """
-    research_tools = [web_search, geocode, estimate_travel, fx_convert, venue_rating]
+    research_tools = [
+        web_search,
+        geocode,
+        estimate_travel,
+        fx_convert,
+        venue_rating,
+        flight_search,
+    ]
     tools = list(research_tools)
     if config.use_repair_loop:
         tools.append(make_check_tool(spec, run_dir, counter))
@@ -290,10 +313,29 @@ def user_message(spec: TripSpec) -> str:
 
 
 def new_run_dir(spec: TripSpec, root: Path | None = None) -> Path:
+    """Allocate a unique directory for one run.
+
+    The timestamp alone is not enough. Evals run cases concurrently and repeat
+    each one, so two repetitions of the same spec routinely start within the
+    same second — which used to hand them the same directory. They then raced
+    to stage skills into it, and worse, would have overwritten each other's
+    `itinerary.json`, silently scoring one plan twice.
+
+    `mkdir(exist_ok=False)` is what makes this safe rather than merely
+    unlikely: the filesystem, not the clock, guarantees the winner.
+    """
+    base = root or REPO_ROOT / "runs"
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    run_dir = (root or REPO_ROOT / "runs") / f"{spec.slug}-{stamp}"
-    (run_dir / "research").mkdir(parents=True, exist_ok=True)
-    return run_dir
+    for attempt in range(1000):
+        suffix = "" if attempt == 0 else f"-{attempt}"
+        run_dir = base / f"{spec.slug}-{stamp}{suffix}"
+        try:
+            (run_dir / "research").mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return run_dir
+    msg = f"could not allocate a run directory under {base}"
+    raise RuntimeError(msg)
 
 
 def plan_trip(
