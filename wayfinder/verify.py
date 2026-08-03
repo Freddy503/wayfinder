@@ -67,6 +67,35 @@ class Violation:
         }
 
 
+#: What each check actually verifies, in one line, for a human reading the
+#: result. A verdict that only lists failures leaves the reader unable to tell
+#: a thorough pass from a shallow one — "no violations" could mean anything
+#: from fifteen satisfied constraints to fifteen skipped ones.
+CHECK_DESCRIPTIONS: dict[str, str] = {
+    "schema_valid": "The itinerary parses and every field has the right shape",
+    "currency_match": "Costs are priced in the budget's currency",
+    "dates_covered": "One day planned for every date of the trip, and no others",
+    "chronology": "Items run in order and never overlap",
+    "budget": "Total estimated cost stays within the cap",
+    "transit_feasible": "Every move between venues has a leg that fits the gap",
+    "opening_hours": "Nothing is scheduled at a closed venue or outside its hours",
+    "must_do_coverage": "Everything on the must-do list is scheduled",
+    "time_window": "Nothing starts before, or runs past, the stated times",
+    "required_meals": "Each day includes the meals that were asked for",
+    "mobility": "Daily walking stays within the limit",
+    "free_block": "Each day has an unscheduled stretch, measured net of travel",
+    "flights_present": "Both flight legs exist when an origin is given",
+    "flight_alignment": "The outbound lands by day one; the return leaves no earlier than the last day",
+    "arrival_realism": "Nothing starts before the traveller can get in from the airport",
+    "departure_realism": "Nothing runs past the moment they must leave for the airport",
+    "pace": "Activity count per day is sensible for the stated pace",
+    "grounded": "Every venue has a source backing it",
+    "no_duplicates": "No venue is scheduled twice",
+    "hours_known": "Opening hours were actually established, not assumed",
+    "flights_grounded": "Flight times and fares cite a source",
+}
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -76,10 +105,18 @@ class CheckResult:
     #: the pass-rate denominator so they can't inflate a score.
     skipped: bool = False
     violations: list[Violation] = field(default_factory=list)
+    #: What this check found, in the plan's own numbers — "216 of 600 EUR,
+    #: 384 to spare" rather than a bare tick. This is the difference between
+    #: a result you can audit and one you have to trust.
+    detail: str | None = None
 
     @property
     def passed(self) -> bool:
         return not self.violations
+
+    @property
+    def description(self) -> str:
+        return CHECK_DESCRIPTIONS.get(self.name, self.name.replace("_", " "))
 
 
 @dataclass
@@ -109,6 +146,8 @@ class ConstraintReport:
                     "skipped": c.skipped,
                     "passed": c.passed,
                     "violation_count": len(c.violations),
+                    "description": c.description,
+                    "detail": c.detail,
                 }
                 for c in self.checks
             ],
@@ -256,6 +295,7 @@ def _rate(checks: list[CheckResult]) -> float:
 
 def _check_currency(spec: TripSpec, itin: Itinerary) -> CheckResult:
     result = CheckResult("currency_match", "hard")
+    result.detail = f"priced in {itin.currency.upper()}"
     if itin.currency.upper() != spec.budget.currency.upper():
         result.violations.append(
             Violation(
@@ -272,6 +312,10 @@ def _check_dates(spec: TripSpec, itin: Itinerary) -> CheckResult:
     result = CheckResult("dates_covered", "hard")
     wanted = set(spec.dates.days())
     got = {d.date for d in itin.days}
+    result.detail = (
+        f"{len(wanted)} day{'s' if len(wanted) != 1 else ''}, "
+        f"{spec.dates.start:%d %b}–{spec.dates.end:%d %b}"
+    )
     for missing in sorted(wanted - got):
         result.violations.append(
             Violation("dates_covered", "hard", "no plan for this date", missing.isoformat())
@@ -296,6 +340,8 @@ def _check_chronology(itin: Itinerary) -> CheckResult:
     at once and the day fits. It doesn't.
     """
     result = CheckResult("chronology", "hard")
+    total = sum(len(d.items) for d in itin.days)
+    result.detail = f"{total} items, none overlapping"
     for day in itin.days:
         for prev, curr in zip(day.items, day.items[1:], strict=False):
             if _minutes(curr.start) < _minutes(prev.end):
@@ -326,6 +372,12 @@ def _check_budget(spec: TripSpec, itin: Itinerary, metrics: dict[str, float]) ->
     cap = spec.budget.total
     metrics["total_cost"] = round(total, 2)
     metrics["budget_overrun_pct"] = round(max(0.0, (total - cap) / cap), 4)
+    air_note = f" (incl. {air:,.0f} airfare)" if air else ""
+    result.detail = (
+        f"{total:,.0f} of {cap:,.0f} {itin.currency}{air_note} — "
+        f"{cap - total:,.0f} to spare" if total <= cap
+        else f"{total:,.0f} of {cap:,.0f} {itin.currency}{air_note}"
+    )
     if total > cap:
         result.violations.append(
             Violation(
@@ -395,6 +447,11 @@ def _check_transit(spec: TripSpec, itin: Itinerary, metrics: dict[str, float]) -
                 )
 
     metrics["transit_infeasibility_count"] = float(infeasible)
+    legs = [i.transit_from_previous for _, i in itin.all_items() if i.transit_from_previous]
+    if legs:
+        longest = max(l.minutes for l in legs)
+        cap_note = f" (cap {cap})" if cap else ""
+        result.detail = f"{len(legs)} legs, longest {longest} min{cap_note}"
     return result
 
 
@@ -430,6 +487,12 @@ def _check_opening_hours(itin: Itinerary, metrics: dict[str, float]) -> CheckRes
                     )
                 )
     metrics["opening_hours_violation_count"] = float(len(result.violations))
+    checked = sum(
+        1 for d, i in itin.all_items()
+        if i.venue and i.venue.opening_hours
+        and i.venue.opening_hours.status(weekday_of(d.date)) != "unknown"
+    )
+    result.detail = f"{checked} venues checked against their weekday hours"
     return result
 
 
@@ -453,6 +516,7 @@ def _check_must_do(spec: TripSpec, itin: Itinerary, metrics: dict[str, float]) -
                 Violation("must_do_coverage", "hard", f"{wanted!r} was never scheduled")
             )
     metrics["must_do_coverage"] = round(hits / len(spec.must_do), 4)
+    result.detail = f"{hits} of {len(spec.must_do)} scheduled"
     return result
 
 
@@ -461,6 +525,10 @@ def _check_time_window(spec: TripSpec, itin: Itinerary) -> CheckResult:
     result = CheckResult("time_window", "hard", skipped=earliest is None and latest is None)
     if result.skipped:
         return result
+    bounds = " to ".join(
+        f"{t:%H:%M}" for t in (earliest, latest) if t is not None
+    )
+    result.detail = f"all items within {bounds}"
     for day in itin.days:
         for item in day.items:
             if earliest is not None and _minutes(item.start) < _minutes(earliest):
@@ -489,6 +557,7 @@ def _check_required_meals(spec: TripSpec, itin: Itinerary) -> CheckResult:
     result = CheckResult("required_meals", "hard", skipped=not wanted)
     if result.skipped:
         return result
+    result.detail = f"{', '.join(wanted)} on all {len(itin.days)} days"
     for day in itin.days:
         present = {i.meal_slot for i in day.items if i.kind == "meal"}
         for slot in wanted:
@@ -520,6 +589,8 @@ def _check_mobility(spec: TripSpec, itin: Itinerary, metrics: dict[str, float]) 
                 )
             )
     metrics["peak_walk_km"] = round(peak, 2)
+    if cap is not None:
+        result.detail = f"peak {peak:.1f} km of {cap:.1f} km allowed"
     return result
 
 
@@ -533,6 +604,7 @@ def _check_free_block(spec: TripSpec, itin: Itinerary) -> CheckResult:
     result = CheckResult("free_block", "hard", skipped=want is None)
     if result.skipped:
         return result
+    shortest = None
     for day in itin.days:
         if len(day.items) < 2:
             continue
@@ -541,6 +613,7 @@ def _check_free_block(spec: TripSpec, itin: Itinerary) -> CheckResult:
             gap = _minutes(curr.start) - _minutes(prev.end)
             leg = curr.transit_from_previous
             best = max(best, gap - (leg.minutes if leg else 0))
+        shortest = best if shortest is None else min(shortest, best)
         if best < want:
             result.violations.append(
                 Violation(
@@ -550,6 +623,8 @@ def _check_free_block(spec: TripSpec, itin: Itinerary) -> CheckResult:
                     _where(day),
                 )
             )
+    if shortest is not None:
+        result.detail = f"tightest day has {shortest} min free, needs {want}"
     return result
 
 
@@ -728,6 +803,7 @@ def _check_grounded(itin: Itinerary, metrics: dict[str, float]) -> CheckResult:
                 Violation("grounded", "soft", "no source URL", _where(day, item))
             )
     metrics["grounded_pct"] = round(sourced / len(with_venue), 4) if with_venue else 1.0
+    result.detail = f"{sourced} of {len(with_venue)} venues sourced"
     return result
 
 

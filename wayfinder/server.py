@@ -228,6 +228,9 @@ class RunSession:
                 "passed": result.report.passed,
                 "metrics": result.report.metrics,
                 "violations": [v.to_dict() for v in result.report.violations],
+                # Every check, not just the failures — a verdict that only
+                # lists what broke can't tell a thorough pass from a shallow one.
+                "checks": result.report.to_dict()["checks"],
                 "check_calls": result.check_calls,
                 "run_dir": str(result.run_dir),
                 "error": result.error,

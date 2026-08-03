@@ -124,6 +124,53 @@
   .viol { font-size: 12.5px; padding: 3px 0; color: var(--dim); }
   .viol b { font-family: var(--mono); font-size: 11.5px; }
   .viol.hard b { color: var(--bad); } .viol.soft b { color: var(--warn); }
+  /* result tabs: checks / itinerary / sources */
+  .rtabs { display: flex; gap: 4px; margin: 14px 0 10px; flex-wrap: wrap; }
+  .rtab { padding: 5px 12px; border-radius: 7px; font-size: 12px; cursor: pointer;
+          border: 1px solid var(--border); background: var(--panel-2); color: var(--dim); }
+  .rtab.on { background: #223047; color: #cfe1ff; border-color: #33507d; }
+  .rpane { display: none; } .rpane.on { display: block; }
+
+  /* one row per constraint, passing or not */
+  .chk { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid #1c202a;
+         align-items: flex-start; font-size: 13px; }
+  .chk:last-child { border-bottom: none; }
+  .chk .mk { width: 16px; flex: none; text-align: center; font-family: var(--mono);
+             font-size: 12px; line-height: 1.5; }
+  .chk.pass .mk { color: var(--ok); } .chk.fail .mk { color: var(--bad); }
+  .chk.warn .mk { color: var(--warn); } .chk.skip .mk { color: var(--faint); }
+  .chk .nm { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+  .chk.skip .nm { color: var(--faint); }
+  .chk .ds { color: var(--dim); font-size: 12px; }
+  .chk .dt { color: var(--ok); font-size: 12px; font-family: var(--mono); }
+  .chk.skip .dt, .chk.skip .ds { color: var(--faint); }
+  .chk .vio { color: var(--bad); font-size: 12px; margin-top: 3px; }
+  .chk.warn .vio { color: var(--warn); }
+  .chkgroup { font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+              color: var(--faint); margin: 12px 0 4px; }
+
+  /* readable itinerary */
+  .itin-day { margin-bottom: 16px; }
+  .itin-day h4 { margin: 0 0 2px; font-size: 13.5px; }
+  .itin-day .sum { color: var(--dim); font-size: 12px; font-style: italic;
+                   margin-bottom: 7px; }
+  .itin-row { display: flex; gap: 12px; padding: 5px 0; font-size: 13px;
+              border-bottom: 1px solid #1a1e27; }
+  .itin-row .tm { font-family: var(--mono); font-size: 11.5px; color: var(--faint);
+                  white-space: nowrap; padding-top: 2px; width: 88px; flex: none; }
+  .itin-row .bd { flex: 1; min-width: 0; }
+  .itin-row .ti { font-weight: 600; }
+  .itin-row .mt { color: var(--dim); font-size: 11.5px; }
+  .itin-leg { font-family: var(--mono); font-size: 11px; color: var(--faint);
+              padding: 2px 0 2px 100px; }
+  .itin-cost { color: var(--ok); font-family: var(--mono); font-size: 11.5px;
+               white-space: nowrap; }
+
+  .src { font-size: 12px; padding: 5px 0; border-bottom: 1px solid #1a1e27;
+         display: flex; gap: 10px; }
+  .src a { color: var(--tool); text-decoration: none; word-break: break-all; }
+  .src .for { color: var(--faint); font-size: 11px; white-space: nowrap; }
+
   .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   .links a { color: var(--tool); font-size: 12px; text-decoration: none;
              border: 1px solid var(--border); padding: 4px 9px; border-radius: 6px; }
@@ -781,29 +828,183 @@ function renderInterrupt(actions) {
   feedAdd(card);
 }
 
-/* ---------------- verdict ---------------- */
+/* ---------------- verdict ----------------
+   Three panes rather than one wall of text: what was checked, what was
+   planned, and what it was based on. The checks pane lists every constraint
+   including the ones that passed — "no violations" alone can't distinguish a
+   thorough pass from a plan where nothing was checked at all. */
+function checkRow(c) {
+  const state = c.skipped ? "skip"
+    : c.passed ? "pass"
+    : (c.severity === "soft" ? "warn" : "fail");
+  const row = el("div", "chk " + state);
+  row.append(el("div", "mk", c.skipped ? "–" : c.passed ? "✓" : (state === "warn" ? "!" : "✗")));
+  const body = el("div", null);
+  const head = el("div");
+  head.append(el("span", "nm", c.name));
+  if (c.skipped) head.append(el("span", "ds", "  not requested"));
+  else if (c.detail) head.append(el("span", "dt", "  " + c.detail));
+  body.append(head);
+  body.append(el("div", "ds", c.description));
+  row.append(body);
+  return row;
+}
+
+function renderChecks(pane, d) {
+  const checks = d.checks || [];
+  if (!checks.length) {
+    pane.append(el("div", "empty", "No checks recorded — the run produced nothing to check."));
+    return;
+  }
+  const byName = {};
+  (d.violations || []).forEach(v => (byName[v.check] ||= []).push(v));
+
+  const groups = [
+    ["Hard constraints — these decide pass or fail",
+     checks.filter(c => c.severity === "hard" && !c.skipped)],
+    ["Quality warnings — advisory only",
+     checks.filter(c => c.severity === "soft" && !c.skipped)],
+    ["Not requested — skipped, and excluded from the pass rate",
+     checks.filter(c => c.skipped)],
+  ];
+  groups.forEach(([label, list]) => {
+    if (!list.length) return;
+    pane.append(el("div", "chkgroup", label));
+    list.forEach(c => {
+      const row = checkRow(c);
+      (byName[c.name] || []).forEach(v => {
+        const line = el("div", "vio",
+          v.message + (v.where ? `  ·  ${v.where}` : ""));
+        row.querySelector(".bd, div:nth-child(2)")?.append(line);
+      });
+      pane.append(row);
+    });
+  });
+}
+
+function renderItineraryPane(pane) {
+  if (!journeyData) {
+    pane.append(el("div", "empty", "No itinerary was produced."));
+    return;
+  }
+  (journeyData.flights || []).forEach(f => {
+    const row = el("div", "itin-row");
+    row.append(el("div", "tm", `${f.depart_time}–${f.arrive_time}${f.arrives_next_day ? "+1" : ""}`));
+    const bd = el("div", "bd");
+    bd.append(el("div", "ti",
+      `✈ ${f.direction} · ${f.origin_airport} → ${f.destination_airport}`));
+    bd.append(el("div", "mt", [f.airline, f.flight_number,
+      f.stops === 0 ? "direct" : `${f.stops} stop`].filter(Boolean).join(" · ")));
+    row.append(bd);
+    if (f.estimated_cost)
+      row.append(el("div", "itin-cost", `${f.estimated_cost} ${journeyData.currency}`));
+    pane.append(row);
+  });
+
+  journeyData.days.forEach(day => {
+    const block = el("div", "itin-day");
+    const h = el("h4", null, new Date(day.date + "T12:00").toLocaleDateString(undefined,
+      { weekday: "long", day: "numeric", month: "long" }));
+    block.append(h);
+    if (day.summary) block.append(el("div", "sum", day.summary));
+    day.items.forEach(it => {
+      const leg = it.transit_from_previous;
+      if (leg) block.append(el("div", "itin-leg",
+        `↓ ${leg.minutes} min ${leg.mode}${leg.distance_km ? ` · ${leg.distance_km.toFixed(1)} km` : ""}`));
+      const row = el("div", "itin-row");
+      row.append(el("div", "tm", `${it.start}–${it.end}`));
+      const bd = el("div", "bd");
+      bd.append(el("div", "ti", it.title));
+      const bits = [];
+      if (it.venue?.address) bits.push(it.venue.address);
+      if (it.venue?.rating) bits.push(`★ ${it.venue.rating.score.toFixed(1)}` +
+        (it.venue.rating.count ? ` (${it.venue.rating.count.toLocaleString()})` : ""));
+      if (bits.length) bd.append(el("div", "mt", bits.join("  ·  ")));
+      if (it.note) bd.append(el("div", "mt", it.note));
+      row.append(bd);
+      if (it.estimated_cost)
+        row.append(el("div", "itin-cost", `${it.estimated_cost} ${journeyData.currency}`));
+      block.append(row);
+    });
+    pane.append(block);
+  });
+}
+
+function renderSourcesPane(pane) {
+  if (!journeyData) { pane.append(el("div", "empty", "Nothing to cite.")); return; }
+  const map = new Map();
+  const add = (url, what) => {
+    if (!url) return;
+    if (!map.has(url)) map.set(url, new Set());
+    map.get(url).add(what);
+  };
+  journeyData.days.forEach(d => d.items.forEach(i => {
+    (i.sources || []).forEach(s => add(s, i.title));
+    if (i.venue?.rating?.source) add(i.venue.rating.source, `${i.title} — rating`);
+  }));
+  (journeyData.flights || []).forEach(f =>
+    (f.sources || []).forEach(s => add(s, `${f.direction} flight`)));
+
+  if (!map.size) {
+    pane.append(el("div", "empty",
+      "No sources recorded — every claim here is unverified."));
+    return;
+  }
+  pane.append(el("div", "chkgroup", `${map.size} sources behind this plan`));
+  [...map.entries()].sort().forEach(([url, what]) => {
+    const row = el("div", "src");
+    const a = el("a", null, url.replace(/^https?:\/\//, ""));
+    a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    row.append(a);
+    row.append(el("div", "for", [...what].slice(0, 2).join(", ")));
+    pane.append(row);
+  });
+}
+
 function renderVerdict(d) {
   const card = el("div", "verdict " + (d.passed ? "pass" : "fail"));
-  card.append(el("h3", null, d.passed ? "Passed every hard constraint" : "Did not pass"));
+
+  const hard = (d.checks || []).filter(c => c.severity === "hard" && !c.skipped);
+  const passedHard = hard.filter(c => c.passed).length;
+  card.append(el("h3", null, d.passed
+    ? `Passed all ${hard.length} hard constraints`
+    : `Failed ${hard.length - passedHard} of ${hard.length} hard constraints`));
+
   if (d.error) card.append(el("div", "det", d.error));
   if (d.feasible === false)
     card.append(el("div", "det", "Reported infeasible: " + (d.infeasibility_reason || "")));
 
   const m = d.metrics || {};
-  const shown = ["hard_pass_rate","soft_pass_rate","total_cost","budget_overrun_pct",
-                 "must_do_coverage","grounded_pct"].filter(k => k in m);
+  const shown = [["total_cost","cost"],["budget_overrun_pct","over budget"],
+                 ["must_do_coverage","must-dos"],["grounded_pct","sourced"],
+                 ["peak_walk_km","peak walk km"]].filter(([k]) => k in m);
   if (shown.length) {
     const row = el("div", "metrics");
-    shown.forEach(k => row.append(el("span", null, `${k} ${(+m[k]).toFixed(2).replace(/\.00$/,"")}`)));
+    shown.forEach(([k, label]) =>
+      row.append(el("span", null, `${label} ${(+m[k]).toFixed(2).replace(/\.00$/,"")}`)));
     row.append(el("span", null, `check calls ${d.check_calls ?? 0}`));
     card.append(row);
   }
-  (d.violations || []).forEach(v => {
-    const line = el("div", "viol " + v.severity);
-    line.append(el("b", null, v.severity + " " + v.check + " "));
-    line.append(document.createTextNode(v.message + (v.where ? ` (${v.where})` : "")));
-    card.append(line);
+
+  const tabs = el("div", "rtabs");
+  const panes = {};
+  [["checks", `Checks (${(d.checks || []).length})`],
+   ["itinerary", "Itinerary"],
+   ["sources", "Sources"]].forEach(([key, label], i) => {
+    const tab = el("button", "rtab" + (i === 0 ? " on" : ""), label);
+    tab.onclick = () => {
+      tabs.querySelectorAll(".rtab").forEach(t => t.classList.remove("on"));
+      tab.classList.add("on");
+      Object.entries(panes).forEach(([k, p]) => p.classList.toggle("on", k === key));
+    };
+    tabs.append(tab);
+    panes[key] = el("div", "rpane" + (i === 0 ? " on" : ""));
   });
+  card.append(tabs);
+
+  renderChecks(panes.checks, d);
+  Object.values(panes).forEach(p => card.append(p));
+
   if (d.has_itinerary) {
     const links = el("div", "links");
     ["itinerary.md","itinerary.json","constraints.json","sources.md"].forEach(n => {
@@ -814,6 +1015,11 @@ function renderVerdict(d) {
     card.append(links);
   }
   feedAdd(card);
+  // The itinerary and sources panes need journeyData, which loads right after.
+  window.__fillPanes = () => {
+    panes.itinerary.innerHTML = ""; renderItineraryPane(panes.itinerary);
+    panes.sources.innerHTML = ""; renderSourcesPane(panes.sources);
+  };
 }
 
 /* ---------------- map ----------------
@@ -1200,6 +1406,8 @@ async function loadJourney() {
     const res = await fetch(`/api/runs/${runId}/artifact/itinerary.json`);
     if (!res.ok) return;
     renderJourney(await res.json());
+    // Fill the verdict's itinerary/sources panes now that the data exists.
+    if (window.__fillPanes) window.__fillPanes();
   } catch (e) { console.warn("journey unavailable:", e); }
 }
 
