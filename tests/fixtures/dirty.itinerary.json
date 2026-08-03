@@ -1,0 +1,117 @@
+{
+  "destination": "Lisbon, Portugal",
+  "currency": "USD",
+  "feasible": true,
+  "days": [
+    {
+      "date": "2026-10-12",
+      "items": [
+        {
+          "start": "08:00",
+          "end": "09:30",
+          "kind": "activity",
+          "title": "Sunrise walk",
+          "estimated_cost": 0,
+          "sources": [],
+          "venue": { "name": "Praca do Comercio", "lat": 38.7075, "lon": -9.1364 }
+        },
+        {
+          "start": "09:00",
+          "end": "10:30",
+          "kind": "activity",
+          "title": "Castelo de Sao Jorge",
+          "estimated_cost": 30,
+          "sources": ["https://castelodesaojorge.pt/"],
+          "venue": {
+            "name": "Castelo de Sao Jorge",
+            "lat": 38.7139,
+            "lon": -9.1335,
+            "opening_hours": { "week": { "mon": [] } }
+          }
+        },
+        {
+          "start": "11:00",
+          "end": "12:00",
+          "kind": "activity",
+          "title": "Museu Nacional de Arte Antiga",
+          "estimated_cost": 0,
+          "sources": ["https://www.museudearteantiga.pt/"],
+          "transit_from_previous": { "mode": "transit", "minutes": 45 },
+          "venue": {
+            "name": "Museu Nacional de Arte Antiga",
+            "lat": 38.7043,
+            "lon": -9.1613,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "14:00", "close": "18:00" }] }
+            }
+          }
+        },
+        {
+          "start": "12:30",
+          "end": "14:00",
+          "kind": "activity",
+          "title": "Back to the square",
+          "estimated_cost": 0,
+          "sources": ["https://www.visitlisboa.com/"],
+          "transit_from_previous": { "mode": "walk", "minutes": 25, "distance_km": 6.0 },
+          "venue": {
+            "name": "Praca do Comercio",
+            "lat": 38.7075,
+            "lon": -9.1364,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "00:00", "close": "23:59" }] }
+            }
+          }
+        },
+        {
+          "start": "14:30",
+          "end": "16:00",
+          "kind": "activity",
+          "title": "Feira da Ladra",
+          "estimated_cost": 0,
+          "sources": ["https://www.visitlisboa.com/feira-da-ladra"],
+          "transit_from_previous": { "mode": "walk", "minutes": 20, "distance_km": 6.0 },
+          "venue": {
+            "name": "Feira da Ladra",
+            "lat": 38.7153,
+            "lon": -9.1249,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "10:00", "close": "18:00" }] }
+            }
+          }
+        },
+        {
+          "start": "16:20",
+          "end": "23:30",
+          "kind": "activity",
+          "title": "Fado marathon",
+          "estimated_cost": 600,
+          "sources": ["https://www.tascadochico.pt/"],
+          "transit_from_previous": { "mode": "walk", "minutes": 10, "distance_km": 0.0 },
+          "venue": { "name": "Tasca do Chico", "lat": 38.7113, "lon": -9.1449 }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-14",
+      "items": [
+        {
+          "start": "10:00",
+          "end": "11:00",
+          "kind": "activity",
+          "title": "Padrao dos Descobrimentos",
+          "estimated_cost": 6,
+          "sources": ["https://padraodosdescobrimentos.pt/"],
+          "venue": {
+            "name": "Padrao dos Descobrimentos",
+            "lat": 38.6936,
+            "lon": -9.2057,
+            "opening_hours": {
+              "week": { "wed": [{ "open": "09:00", "close": "18:00" }] }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

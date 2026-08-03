@@ -1,0 +1,300 @@
+# The eval dataset.
+#
+# Kept as one file rather than twenty, because it is uploaded to LangSmith as a
+# single unit and edited as a single unit — splitting it across directories
+# makes it harder to see the difficulty spread, which is the only property that
+# actually matters here.
+#
+# A dataset where everything passes teaches you nothing. The spread below is
+# deliberate: easy cases catch regressions, constraint-dense cases are where
+# the repair loop earns its keep, and the infeasible cases are the ones that
+# expose a bad agent — the correct answer there is `feasible: false`, and an
+# agent that fabricates a plan instead scores zero on `correctly_refused` while
+# looking perfectly healthy on every other metric.
+#
+# `should_refuse: true` is the reference output. It is stripped before the spec
+# reaches the agent.
+
+# ---------------------------------------------------------------- easy
+- name: lisbon-easy
+  category: easy
+  spec:
+    destination: Lisbon, Portugal
+    dates: {start: 2026-10-12, end: 2026-10-14}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 900, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      earliest_start: "09:30"
+      required_meals: [dinner]
+    soft_preferences:
+      - viewpoints over museums
+      - neighbourhood restaurants over tourist-facing ones
+    must_do: [Time Out Market]
+
+- name: porto-easy
+  category: easy
+  spec:
+    destination: Porto, Portugal
+    dates: {start: 2026-09-07, end: 2026-09-09}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 750, excludes: [flights, accommodation]}
+    pace: standard
+    soft_preferences: [river walks, port cellars]
+    must_do: [Livraria Lello]
+
+- name: ghent-easy
+  category: easy
+  spec:
+    destination: Ghent, Belgium
+    dates: {start: 2026-05-15, end: 2026-05-17}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 800, excludes: [flights, accommodation]}
+    pace: relaxed
+    soft_preferences: [medieval centre on foot, one long dinner]
+
+- name: valencia-family
+  category: easy
+  spec:
+    destination: Valencia, Spain
+    dates: {start: 2026-04-06, end: 2026-04-09}
+    party: {adults: 2, children: 2}
+    budget: {currency: EUR, total: 1100, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      earliest_start: "10:00"
+      min_free_block_minutes: 120
+      required_meals: [lunch, dinner]
+    soft_preferences: [things that work for a 6 and a 9 year old, beach time]
+
+- name: edinburgh-easy
+  category: easy
+  spec:
+    destination: Edinburgh, Scotland
+    dates: {start: 2026-06-11, end: 2026-06-13}
+    party: {adults: 2}
+    budget: {currency: GBP, total: 700, excludes: [flights, accommodation]}
+    pace: standard
+    must_do: [Edinburgh Castle]
+
+# ------------------------------------------------------- tight budget
+- name: lisbon-tight
+  category: tight-budget
+  spec:
+    destination: Lisbon, Portugal
+    dates: {start: 2026-10-12, end: 2026-10-14}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 320, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      required_meals: [dinner]
+    soft_preferences: [free viewpoints, cheap eats, markets]
+    must_do: [Time Out Market]
+
+- name: krakow-shoestring
+  category: tight-budget
+  spec:
+    destination: Krakow, Poland
+    dates: {start: 2026-03-20, end: 2026-03-23}
+    party: {adults: 2}
+    budget: {currency: PLN, total: 900, excludes: [flights, accommodation]}
+    pace: standard
+    soft_preferences: [milk bars, walking everywhere]
+
+- name: naples-tight
+  category: tight-budget
+  spec:
+    destination: Naples, Italy
+    dates: {start: 2026-11-05, end: 2026-11-08}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 400, excludes: [flights, accommodation]}
+    pace: standard
+    constraints:
+      required_meals: [dinner]
+    soft_preferences: [pizza, street food, one archaeological site]
+
+# --------------------------------------------------- constraint-dense
+- name: rome-mobility
+  category: constraint-dense
+  spec:
+    destination: Rome, Italy
+    dates: {start: 2026-04-18, end: 2026-04-21}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 1200, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      earliest_start: "10:30"
+      latest_end: "21:30"
+      max_transit_minutes: 25
+      min_free_block_minutes: 150
+      required_meals: [lunch, dinner]
+    mobility: {max_walk_km_per_day: 3.5}
+    soft_preferences: [step-free where possible, sit-down lunches, taxis are fine]
+    must_do: [Pantheon]
+
+- name: copenhagen-dietary
+  category: constraint-dense
+  spec:
+    destination: Copenhagen, Denmark
+    dates: {start: 2026-05-09, end: 2026-05-11}
+    party: {adults: 2}
+    budget: {currency: DKK, total: 6500, excludes: [flights, accommodation]}
+    pace: standard
+    constraints:
+      required_meals: [breakfast, dinner]
+      max_transit_minutes: 30
+    dietary: [vegan, no gluten]
+    soft_preferences: [design and architecture, cycling]
+
+- name: seville-heat
+  category: constraint-dense
+  spec:
+    destination: Seville, Spain
+    dates: {start: 2026-07-14, end: 2026-07-17}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 1000, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      earliest_start: "09:00"
+      latest_end: "23:30"
+      min_free_block_minutes: 240
+      required_meals: [dinner]
+    mobility: {max_walk_km_per_day: 5}
+    soft_preferences:
+      - nothing outdoors between 14:00 and 18:00, it will be 40 degrees
+      - late dinners
+
+- name: amsterdam-timed
+  category: constraint-dense
+  spec:
+    destination: Amsterdam, Netherlands
+    dates: {start: 2026-02-19, end: 2026-02-21}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 850, excludes: [flights, accommodation]}
+    pace: standard
+    constraints:
+      earliest_start: "10:00"
+      latest_end: "22:00"
+      max_transit_minutes: 20
+      required_meals: [dinner]
+      max_activities_per_day: 3
+    must_do: [Rijksmuseum, Anne Frank House]
+    soft_preferences: [book timed entry well ahead, avoid the crowds]
+
+# ----------------------------------------------------- shoulder season
+- name: reykjavik-winter
+  category: shoulder-season
+  spec:
+    destination: Reykjavik, Iceland
+    dates: {start: 2026-01-15, end: 2026-01-18}
+    party: {adults: 2}
+    budget: {currency: ISK, total: 260000, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      earliest_start: "10:30"
+      latest_end: "22:00"
+    soft_preferences:
+      - only four hours of usable daylight, plan around it
+      - northern lights if conditions allow
+
+- name: dubrovnik-offseason
+  category: shoulder-season
+  spec:
+    destination: Dubrovnik, Croatia
+    dates: {start: 2026-11-18, end: 2026-11-21}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 700, excludes: [flights, accommodation]}
+    pace: relaxed
+    soft_preferences:
+      - much of the town shuts out of season, check before committing
+      - the old town on foot
+
+- name: bruges-january
+  category: shoulder-season
+  spec:
+    destination: Bruges, Belgium
+    dates: {start: 2026-01-26, end: 2026-01-28}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 600, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      required_meals: [dinner]
+    soft_preferences: [indoor options for the wet afternoons, beer]
+
+# ------------------------------------------------------- infeasible
+# The correct answer is `feasible: false` with the conflict named. An agent
+# that returns a plan here has ignored the spec, however good the plan looks.
+- name: five-cities-six-days
+  category: infeasible
+  should_refuse: true
+  spec:
+    destination: Lisbon, Madrid, Barcelona, Rome and Athens
+    dates: {start: 2026-06-01, end: 2026-06-06}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 400, excludes: []}
+    pace: relaxed
+    constraints:
+      max_transit_minutes: 30
+      min_free_block_minutes: 180
+      required_meals: [breakfast, lunch, dinner]
+    soft_preferences: [see the major sights in each]
+
+- name: paris-impossible-budget
+  category: infeasible
+  should_refuse: true
+  spec:
+    destination: Paris, France
+    dates: {start: 2026-05-04, end: 2026-05-09}
+    party: {adults: 2, children: 2}
+    budget: {currency: EUR, total: 60, excludes: [flights]}
+    pace: standard
+    constraints:
+      required_meals: [breakfast, lunch, dinner]
+    must_do: [Louvre, Eiffel Tower summit]
+
+- name: tokyo-contradictory
+  category: infeasible
+  should_refuse: true
+  spec:
+    destination: Tokyo, Japan
+    dates: {start: 2026-04-02, end: 2026-04-05}
+    party: {adults: 2}
+    budget: {currency: JPY, total: 180000, excludes: [flights, accommodation]}
+    pace: packed
+    constraints:
+      earliest_start: "11:00"
+      latest_end: "15:00"
+      max_transit_minutes: 10
+      min_free_block_minutes: 180
+      required_meals: [breakfast, lunch, dinner]
+      max_activities_per_day: 6
+    soft_preferences: [see as much as possible]
+
+# ------------------------------------------------------------- edges
+- name: athens-single-day
+  category: edge
+  spec:
+    destination: Athens, Greece
+    dates: {start: 2026-09-21, end: 2026-09-21}
+    party: {adults: 1}
+    budget: {currency: EUR, total: 120, excludes: []}
+    pace: packed
+    constraints:
+      earliest_start: "08:00"
+      latest_end: "20:00"
+    must_do: [Acropolis]
+    soft_preferences: [one day between flights, keep it near the centre]
+
+- name: vienna-late-arrival
+  category: edge
+  spec:
+    destination: Vienna, Austria
+    dates: {start: 2026-03-13, end: 2026-03-15}
+    party: {adults: 2}
+    budget: {currency: EUR, total: 650, excludes: [flights, accommodation]}
+    pace: relaxed
+    constraints:
+      required_meals: [dinner]
+    soft_preferences:
+      - we land at 19:00 on the first day and fly out at 11:00 on the last
+      - coffee houses, one concert if the timing works

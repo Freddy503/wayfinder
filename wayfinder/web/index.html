@@ -1,0 +1,1279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wayfinder</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1d212b; --border: #272c38;
+    --text: #e6e9ef; --dim: #8b93a7; --faint: #5c6478;
+    --ok: #6ee7a0; --warn: #fbbf24; --bad: #f87171;
+    --tool: #60a5fa; --sub: #a78bfa; --accent: #6ee7a0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex: none;
+  }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .3px; font-weight: 600; }
+  header .sub { color: var(--faint); font-size: 12px; }
+  .spacer { flex: 1; }
+  .status {
+    font-size: 12px; padding: 3px 10px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--dim); font-family: var(--mono);
+  }
+  .status.running { color: var(--warn); border-color: #4a3d1a; background: #221c0c; }
+  .status.waiting { color: var(--sub); border-color: #3a3160; background: #1c1830; }
+  .status.finished { color: var(--ok); border-color: #234634; background: #0f2418; }
+  .status.error { color: var(--bad); border-color: #4d2626; background: #241010; }
+
+  main { display: flex; flex: 1; min-height: 0; }
+  aside {
+    width: 380px; flex: none; border-right: 1px solid var(--border);
+    background: var(--panel); overflow-y: auto; padding: 16px;
+  }
+  section.feed { flex: 1; overflow-y: auto; padding: 16px 20px; min-width: 0; }
+
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .9px;
+       color: var(--faint); margin: 0 0 10px; font-weight: 600; }
+  .card { background: var(--panel-2); border: 1px solid var(--border);
+          border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab { flex: 1; padding: 7px; text-align: center; border-radius: 8px; cursor: pointer;
+         border: 1px solid var(--border); background: var(--panel-2); color: var(--dim);
+         font-size: 13px; user-select: none; }
+  .tab.on { background: #223047; color: #cfe1ff; border-color: #33507d; }
+
+  label { display: block; font-size: 12px; color: var(--dim); margin: 10px 0 4px; }
+  input, select, textarea {
+    width: 100%; padding: 7px 9px; border-radius: 7px; background: #12151c;
+    border: 1px solid var(--border); color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #3d5a8a; }
+  textarea { resize: vertical; min-height: 62px; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; min-width: 0; }
+  .hint { font-size: 11px; color: var(--faint); margin-top: 3px; }
+
+  button {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px;
+    font-family: inherit;
+  }
+  button:hover:not(:disabled) { background: #262c3a; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #1c3a2a; border-color: #2c6244; color: var(--ok); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #235037; }
+  button.danger { background: #2e1717; border-color: #5d2a2a; color: var(--bad); }
+  button.danger:hover:not(:disabled) { background: #3d1d1d; }
+  button.sm { padding: 5px 10px; font-size: 12px; }
+
+  details.opts { margin-top: 12px; }
+  details.opts summary { cursor: pointer; font-size: 12px; color: var(--dim); }
+  .check { display: flex; align-items: center; gap: 7px; margin: 6px 0; font-size: 12.5px; }
+  .check input { width: auto; }
+
+  /* wizard */
+  .qnum { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .qtext { font-size: 15px; margin: 4px 0 12px; line-height: 1.4; }
+  .wizbar { display: flex; gap: 8px; margin-top: 14px; }
+  .dots { display: flex; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
+  .dot.done { background: #2c6244; } .dot.now { background: var(--accent); }
+
+  /* feed */
+  .ev { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid #1c202a;
+        align-items: flex-start; font-size: 13px; }
+  .ev .ico { width: 18px; flex: none; text-align: center; font-size: 12px; line-height: 1.6; }
+  .ev .body { flex: 1; min-width: 0; }
+  .ev .name { font-family: var(--mono); font-size: 12px; }
+  .ev .det { color: var(--dim); font-size: 12.5px; word-break: break-word; }
+  .ev .det.pre { font-family: var(--mono); font-size: 11.5px; color: var(--faint);
+                 white-space: pre-wrap; margin-top: 3px; max-height: 150px; overflow: auto; }
+  .ev.nested { margin-left: 26px; border-left: 2px solid #2b2440; padding-left: 12px; }
+  .t-tool .name { color: var(--tool); } .t-sub .name { color: var(--sub); }
+  .t-check .name { color: var(--ok); } .t-check.fail .name { color: var(--bad); }
+  .t-text .det { color: var(--text); }
+  .t-err .name { color: var(--bad); }
+
+  .hitl { border: 1px solid #3a3160; background: #1a1730; border-radius: 10px;
+          padding: 14px; margin: 12px 0; }
+  .hitl h3 { margin: 0 0 4px; font-size: 13px; color: var(--sub); }
+  .hitl pre { background: #12101f; border: 1px solid #2a2545; border-radius: 7px;
+              padding: 9px; font-size: 11.5px; overflow: auto; max-height: 220px;
+              font-family: var(--mono); margin: 8px 0; }
+  .hitl .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+  .verdict { border-radius: 10px; padding: 14px; margin: 14px 0; border: 1px solid; }
+  .verdict.pass { border-color: #2c6244; background: #0f2418; }
+  .verdict.fail { border-color: #5d2a2a; background: #241010; }
+  .verdict h3 { margin: 0 0 8px; font-size: 15px; }
+  .metrics { display: flex; flex-wrap: wrap; gap: 12px; font-family: var(--mono);
+             font-size: 11.5px; color: var(--dim); margin: 8px 0; }
+  .viol { font-size: 12.5px; padding: 3px 0; color: var(--dim); }
+  .viol b { font-family: var(--mono); font-size: 11.5px; }
+  .viol.hard b { color: var(--bad); } .viol.soft b { color: var(--warn); }
+  .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .links a { color: var(--tool); font-size: 12px; text-decoration: none;
+             border: 1px solid var(--border); padding: 4px 9px; border-radius: 6px; }
+  .links a:hover { background: var(--panel-2); }
+
+  /* ---- print / PDF ----
+     The screen app is a dark, scrolling, interactive thing; a printed
+     itinerary is a light, paginated document you carry. Rather than trying to
+     coerce the live DOM into paper, `buildPrintable()` compiles the same
+     journey data into a dedicated #printable section that only exists for
+     print — so the map pane, the event feed and the sidebar simply don't
+     participate. */
+  #printable { display: none; }
+  @media print {
+    @page { size: A4; margin: 14mm 12mm; }
+    body { background: #fff !important; color: #111 !important; height: auto; display: block; }
+    header, main, .hitl { display: none !important; }
+    #printable { display: block !important; }
+    a { color: #111 !important; text-decoration: none; }
+    .pr-h1 { font-size: 21px; margin: 0 0 2px; }
+    .pr-sub { font-size: 11px; color: #555; margin-bottom: 12px; }
+    .pr-note { font-size: 11.5px; margin-bottom: 14px; line-height: 1.5; }
+    .pr-day { break-inside: avoid; page-break-inside: avoid; margin-bottom: 16px; }
+    .pr-dayh { font-size: 14px; border-bottom: 1.5px solid #111; padding-bottom: 3px;
+               margin-bottom: 3px; }
+    .pr-daysum { font-size: 10.5px; color: #555; font-style: italic; margin-bottom: 6px; }
+    table.pr { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+    table.pr th { text-align: left; font-size: 9px; text-transform: uppercase;
+                  letter-spacing: .5px; color: #666; border-bottom: 1px solid #bbb;
+                  padding: 3px 4px; }
+    table.pr td { padding: 4px; border-bottom: 1px solid #e6e6e6; vertical-align: top; }
+    table.pr tr.leg td { color: #666; font-size: 9.5px; border-bottom: none;
+                         padding: 1px 4px 1px 26px; font-style: italic; }
+    .pr-when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .pr-num { display: inline-block; width: 15px; height: 15px; border-radius: 50%;
+              background: #111; color: #fff; text-align: center; font-size: 9px;
+              line-height: 15px; margin-right: 5px; }
+    .pr-title { font-weight: 600; }
+    .pr-meta { color: #555; font-size: 9.5px; }
+    .pr-stars { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .pr-totals { font-size: 10px; color: #333; margin-top: 5px;
+                 border-top: 1px solid #bbb; padding-top: 4px; }
+    .pr-foot { margin-top: 18px; border-top: 1px solid #bbb; padding-top: 8px;
+               font-size: 9px; color: #666; line-height: 1.5; }
+    .pr-src { font-size: 8.5px; color: #666; word-break: break-all; }
+  }
+
+  .todo { display: flex; gap: 8px; font-size: 12.5px; padding: 3px 0; align-items: baseline; }
+  .todo .mk { font-family: var(--mono); font-size: 11px; width: 14px; flex: none; }
+  .todo.completed { color: var(--faint); text-decoration: line-through; }
+  .todo.in_progress { color: var(--warn); }
+  .empty { color: var(--faint); font-size: 12.5px; font-style: italic; }
+
+  /* center column: map over journey over feed */
+  .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  /* No height transition: animating 0 → 42vh never settled in this engine,
+     which left Leaflet measuring a 1px container and fitting the whole world.
+     The reveal is instant; the map's own tile fade is animation enough. */
+  #map { height: 0; flex: none; background: #0b0d11;
+         border-bottom: 1px solid var(--border); z-index: 0; }
+  #map.on { height: 42vh; }
+  .leaflet-container { background: #0b0d11; font: inherit; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .leaflet-popup-content { font: 12.5px/1.45 inherit; margin: 10px 12px; }
+  .num-pin { display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%; color: #0b0d11; font-weight: 700;
+    font-size: 12px; border: 2px solid #0b0d11; box-shadow: 0 1px 6px rgba(0,0,0,.6); }
+
+  /* journey cards */
+  #journey { flex: none; display: none; border-bottom: 1px solid var(--border);
+             background: var(--panel); padding: 10px 16px 14px; }
+  #journey.on { display: block; }
+  .daytabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  .daytab { padding: 5px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;
+            border: 1px solid var(--border); background: var(--panel-2); color: var(--dim); }
+  .daytab.on { color: var(--text); border-color: currentColor; }
+  .daytab .dotc { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                  margin-right: 6px; }
+  .cardrow { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px;
+             scroll-snap-type: x proximity; align-items: stretch; }
+  .jcard { flex: 0 0 240px; scroll-snap-align: start; background: var(--panel-2);
+           border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px;
+           cursor: pointer; transition: border-color .15s, transform .15s;
+           display: flex; flex-direction: column; gap: 5px; }
+  .jcard:hover { border-color: #3d5a8a; transform: translateY(-2px); }
+  .jcard.hot { border-color: var(--accent); }
+  .jcard .when { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .jcard .title { font-size: 13px; font-weight: 600; line-height: 1.3; }
+  .jcard .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: auto; }
+  .chip { font-size: 10.5px; padding: 2px 8px; border-radius: 12px;
+          border: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
+  .chip.cost { color: var(--ok); border-color: #234634; }
+  .chip.stars { color: var(--warn); border-color: #4a3d1a; }
+  .chip.kind-meal { color: var(--warn); border-color: #4a3d1a; }
+  .chip.hours { color: var(--tool); border-color: #23364f; }
+  .jcard .note { font-size: 11.5px; color: var(--dim); line-height: 1.4;
+                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+                 overflow: hidden; }
+  .jcard a { color: var(--tool); font-size: 11px; text-decoration: none; }
+  .legwrap { flex: 0 0 auto; display: flex; align-items: center; }
+  .leg { font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+         white-space: nowrap; padding: 0 2px; }
+  .feed { flex: 1; overflow-y: auto; padding: 16px 20px; min-width: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wayfinder</h1>
+  <span class="sub">deep agent · live</span>
+  <div class="spacer"></div>
+  <span class="status" id="status">idle</span>
+</header>
+
+<main>
+  <aside>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-mode="form" role="tab" aria-selected="true">Form</button>
+      <button class="tab" data-mode="wizard" role="tab" aria-selected="false">Questions</button>
+      <button class="tab" data-mode="ramble" role="tab" aria-selected="false">🎙 Ramble</button>
+    </div>
+
+    <!-- FORM MODE -->
+    <div id="form-mode">
+      <div class="card">
+        <h2>Trip</h2>
+        <label>Destination</label>
+        <input id="f-dest" placeholder="Lisbon, Portugal">
+        <div class="row">
+          <div><label>From</label><input id="f-start" type="date"></div>
+          <div><label>To</label><input id="f-end" type="date"></div>
+        </div>
+        <div class="row">
+          <div><label>Adults</label><input id="f-adults" type="number" min="1" value="2"></div>
+          <div><label>Children</label><input id="f-children" type="number" min="0" value="0"></div>
+        </div>
+        <div class="row">
+          <div><label>Budget</label><input id="f-budget" type="number" min="1" value="900"></div>
+          <div><label>Currency</label><input id="f-currency" value="EUR" maxlength="3"></div>
+        </div>
+        <label>Pace</label>
+        <select id="f-pace">
+          <option value="relaxed">relaxed — 1–3 activities/day</option>
+          <option value="standard" selected>standard — 2–5</option>
+          <option value="packed">packed — 3–8</option>
+        </select>
+      </div>
+
+      <div class="card">
+        <h2>Hard constraints</h2>
+        <div class="hint" style="margin-bottom:8px">Checked in code. Leave blank to skip.</div>
+        <div class="row">
+          <div><label>Earliest start</label><input id="f-early" type="time"></div>
+          <div><label>Latest end</label><input id="f-late" type="time"></div>
+        </div>
+        <div class="row">
+          <div><label>Max transit (min)</label><input id="f-transit" type="number" min="1"></div>
+          <div><label>Downtime (min)</label><input id="f-free" type="number" min="1"></div>
+        </div>
+        <label>Required meals</label>
+        <div class="check"><input type="checkbox" id="m-breakfast"><span>breakfast</span></div>
+        <div class="check"><input type="checkbox" id="m-lunch"><span>lunch</span></div>
+        <div class="check"><input type="checkbox" id="m-dinner"><span>dinner</span></div>
+        <label>Max walking per day (km)</label>
+        <input id="f-walk" type="number" step="0.5" min="0.5">
+      </div>
+
+      <div class="card">
+        <h2>Preferences</h2>
+        <div class="hint" style="margin-bottom:8px">Free text. Judged, not code-checked.</div>
+        <label>Tastes — one per line</label>
+        <textarea id="f-prefs" placeholder="viewpoints over museums&#10;neighbourhood restaurants"></textarea>
+        <label>Must do — one per line</label>
+        <textarea id="f-must" placeholder="Time Out Market"></textarea>
+        <label>Dietary — one per line</label>
+        <textarea id="f-diet" placeholder="pescatarian"></textarea>
+      </div>
+    </div>
+
+    <!-- WIZARD MODE -->
+    <div id="wizard-mode" style="display:none">
+      <div class="card">
+        <div class="qnum" id="w-num"></div>
+        <div class="qtext" id="w-q"></div>
+        <div id="w-input"></div>
+        <div class="hint" id="w-hint"></div>
+        <div class="wizbar">
+          <button id="w-back" class="sm">Back</button>
+          <button id="w-skip" class="sm">Skip</button>
+          <button id="w-next" class="sm primary" style="flex:1">Next</button>
+        </div>
+        <div class="dots" id="w-dots"></div>
+      </div>
+      <div class="card" id="w-review" style="display:none">
+        <h2>Review</h2>
+        <pre style="font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:pre-wrap;margin:0" id="w-summary"></pre>
+      </div>
+    </div>
+
+    <!-- RAMBLE MODE -->
+    <div id="ramble-mode" style="display:none">
+      <div class="card">
+        <h2>Just talk</h2>
+        <div class="hint" style="margin-bottom:8px">Ramble about the trip — where, when,
+          who's going, what you care about. Corrections win: "€400… actually €600" means €600.
+          No mic? Type or paste instead.</div>
+        <button id="mic" style="width:100%">🎙 Start listening</button>
+        <div class="hint" id="mic-state" style="margin-top:4px"></div>
+        <label>Transcript</label>
+        <textarea id="transcript" rows="7"
+          placeholder="So we're thinking Lisbon in October, four nights, me and my partner…"></textarea>
+      </div>
+      <div class="card">
+        <h2>What I've understood so far</h2>
+        <div id="reqboard"><div class="empty">Requirements appear here as you talk.</div></div>
+        <div id="followup" class="hint" style="margin-top:8px"></div>
+      </div>
+      <button class="primary" id="ramble-go" style="width:100%" disabled>Plan trip</button>
+    </div>
+
+    <div class="card">
+      <h2>Examples</h2>
+      <select id="examples"><option value="">Load a dataset case…</option></select>
+      <label>Past trips</label>
+      <select id="history"><option value="">Reopen a previous run…</option></select>
+      <div class="hint">Loads its map, cards and PDF export.</div>
+    </div>
+
+    <details class="opts">
+      <summary>Harness &amp; approvals</summary>
+      <div class="card" style="margin-top:10px">
+        <label>Model</label>
+        <select id="o-model">
+          <option value="anthropic:claude-sonnet-5" selected>Sonnet 5</option>
+          <option value="anthropic:claude-opus-5">Opus 5</option>
+          <option value="anthropic:claude-haiku-4-5">Haiku 4.5</option>
+        </select>
+        <div class="check" style="margin-top:10px"><input type="checkbox" id="o-sub" checked><span>Research subagents</span></div>
+        <div class="check"><input type="checkbox" id="o-skills" checked><span>Skills</span></div>
+        <div class="check"><input type="checkbox" id="o-repair" checked><span>Repair loop</span></div>
+        <h2 style="margin-top:14px">Ask me before…</h2>
+        <div id="o-interrupts"></div>
+      </div>
+    </details>
+
+    <button class="primary" id="go" style="width:100%;margin-top:6px">Plan trip</button>
+
+    <div class="card" style="margin-top:14px">
+      <h2>Plan</h2>
+      <div id="todos"><div class="empty">The agent's todo list appears here.</div></div>
+    </div>
+  </aside>
+
+  <section class="center">
+    <div id="map" role="region" aria-label="Route map"></div>
+    <div id="journey" role="region" aria-label="Itinerary cards">
+      <div class="daytabs" id="daytabs"></div>
+      <div class="cardrow" id="cardrow"></div>
+    </div>
+    <div class="feed" id="feed">
+      <div class="empty">Describe a trip and hit <b>Plan trip</b>. Every tool call, subagent
+        dispatch and constraint check streams here live — and the map lights up as the
+        agents scout real places.</div>
+    </div>
+  </section>
+</main>
+
+<!-- Sibling of <main>, not a child of it: print hides the whole app shell,
+     and a hidden ancestor would take this with it however it's styled. -->
+<section id="printable" aria-hidden="true"></section>
+
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, txt) => { const n = document.createElement(tag);
+  if (cls) n.className = cls; if (txt !== undefined) n.textContent = txt; return n; };
+const lines = v => v.split("\n").map(s => s.trim()).filter(Boolean);
+
+let runId = null, source = null, agents = new Map();
+
+/* ---------------- input: form ---------------- */
+function specFromForm() {
+  const meals = ["breakfast","lunch","dinner"].filter(m => $("m-"+m).checked);
+  const c = {};
+  if ($("f-early").value) c.earliest_start = $("f-early").value;
+  if ($("f-late").value) c.latest_end = $("f-late").value;
+  if ($("f-transit").value) c.max_transit_minutes = +$("f-transit").value;
+  if ($("f-free").value) c.min_free_block_minutes = +$("f-free").value;
+  if (meals.length) c.required_meals = meals;
+
+  const spec = {
+    destination: $("f-dest").value.trim(),
+    dates: { start: $("f-start").value, end: $("f-end").value },
+    party: { adults: +$("f-adults").value || 2, children: +$("f-children").value || 0 },
+    budget: { currency: ($("f-currency").value || "EUR").toUpperCase(), total: +$("f-budget").value },
+    pace: $("f-pace").value,
+    constraints: c,
+    soft_preferences: lines($("f-prefs").value),
+    must_do: lines($("f-must").value),
+    dietary: lines($("f-diet").value),
+    mobility: {},
+  };
+  if ($("f-walk").value) spec.mobility.max_walk_km_per_day = +$("f-walk").value;
+  return spec;
+}
+
+function fillForm(s) {
+  $("f-dest").value = s.destination || "";
+  $("f-start").value = s.dates?.start || ""; $("f-end").value = s.dates?.end || "";
+  $("f-adults").value = s.party?.adults ?? 2; $("f-children").value = s.party?.children ?? 0;
+  $("f-budget").value = s.budget?.total ?? 900; $("f-currency").value = s.budget?.currency || "EUR";
+  $("f-pace").value = s.pace || "standard";
+  const c = s.constraints || {};
+  $("f-early").value = c.earliest_start || ""; $("f-late").value = c.latest_end || "";
+  $("f-transit").value = c.max_transit_minutes || ""; $("f-free").value = c.min_free_block_minutes || "";
+  ["breakfast","lunch","dinner"].forEach(m =>
+    $("m-"+m).checked = (c.required_meals || []).includes(m));
+  $("f-walk").value = s.mobility?.max_walk_km_per_day || "";
+  $("f-prefs").value = (s.soft_preferences || []).join("\n");
+  $("f-must").value = (s.must_do || []).join("\n");
+  $("f-diet").value = (s.dietary || []).join("\n");
+}
+
+/* ---------------- input: question wizard ----------------
+   Deliberately client-side and deterministic. A model-driven intake would
+   cost tokens and could wander off the schema; these questions map one-to-one
+   onto the same TripSpec the form builds. */
+const QUESTIONS = [
+  { q: "Where are you going?", hint: "City and country — the geocoder wants both.",
+    fields: [["f-dest", "text", "Lisbon, Portugal"]], required: true },
+  { q: "When?", hint: "Arrival and departure dates.",
+    fields: [["f-start", "date"], ["f-end", "date"]], required: true },
+  { q: "Who's going?", fields: [["f-adults","number","adults"], ["f-children","number","children"]] },
+  { q: "What's the budget?", hint: "For the whole party, excluding flights.",
+    fields: [["f-budget","number","900"], ["f-currency","text","EUR"]], required: true },
+  { q: "How full should the days be?", fields: [["f-pace","select"]] },
+  { q: "Any times that are off limits?", hint: "Nothing before / after these times.",
+    fields: [["f-early","time"], ["f-late","time"]] },
+  { q: "How far will you travel between stops?", hint: "Longest single hop, in minutes.",
+    fields: [["f-transit","number","35"]] },
+  { q: "How much downtime do you want each day?", hint: "Unscheduled minutes, net of travel.",
+    fields: [["f-free","number","120"]] },
+  { q: "Which meals must be planned?", meals: true },
+  { q: "Any limit on walking?", hint: "Kilometres per day.", fields: [["f-walk","number","8"]] },
+  { q: "What do you actually enjoy?", hint: "One per line. Honoured where possible, judged not measured.",
+    fields: [["f-prefs","textarea","viewpoints over museums"]] },
+  { q: "Anything you must not miss?", hint: "One per line. Every one has to appear in the plan.",
+    fields: [["f-must","textarea","Time Out Market"]] },
+  { q: "Any dietary requirements?", hint: "One per line.", fields: [["f-diet","textarea","pescatarian"]] },
+];
+
+let step = 0;
+function renderWizard() {
+  const done = step >= QUESTIONS.length;
+  $("w-review").style.display = done ? "" : "none";
+  if (done) {
+    $("w-num").textContent = "";
+    $("w-q").textContent = "Ready.";
+    $("w-input").innerHTML = "";
+    $("w-hint").textContent = "";
+    $("w-next").textContent = "Plan trip";
+    const s = specFromForm();
+    $("w-summary").textContent =
+      `${s.destination || "(no destination)"}\n${s.dates.start || "?"} → ${s.dates.end || "?"}\n` +
+      `${s.party.adults} adults${s.party.children ? " + " + s.party.children + " children" : ""}\n` +
+      `${s.budget.total} ${s.budget.currency} · ${s.pace}\n` +
+      (s.must_do.length ? `must do: ${s.must_do.join(", ")}\n` : "") +
+      (s.dietary.length ? `dietary: ${s.dietary.join(", ")}` : "");
+  } else {
+    const item = QUESTIONS[step];
+    $("w-num").textContent = `Question ${step + 1} of ${QUESTIONS.length}`;
+    $("w-q").textContent = item.q;
+    $("w-hint").textContent = item.hint || "";
+    $("w-next").textContent = "Next";
+    const host = $("w-input"); host.innerHTML = "";
+    if (item.meals) {
+      ["breakfast","lunch","dinner"].forEach(m => {
+        const wrap = el("div", "check");
+        const box = el("input"); box.type = "checkbox"; box.checked = $("m-"+m).checked;
+        box.onchange = () => $("m-"+m).checked = box.checked;
+        wrap.append(box, el("span", null, m)); host.append(wrap);
+      });
+    } else {
+      const row = el("div", item.fields.length > 1 ? "row" : "");
+      item.fields.forEach(([id, type, ph]) => {
+        // Mirror the hidden form control so both modes share one source of truth.
+        const src = $(id);
+        let node;
+        if (type === "select") { node = src.cloneNode(true); node.id = ""; }
+        else if (type === "textarea") { node = el("textarea"); node.placeholder = ph || ""; }
+        else { node = el("input"); node.type = type; node.placeholder = ph || ""; }
+        node.value = src.value;
+        node.oninput = node.onchange = () => { src.value = node.value; };
+        row.append(node); host.append(row);
+      });
+      setTimeout(() => host.querySelector("input,textarea,select")?.focus(), 0);
+    }
+  }
+  $("w-back").disabled = step === 0;
+  $("w-skip").style.display = done ? "none" : "";
+  const dots = $("w-dots"); dots.innerHTML = "";
+  QUESTIONS.forEach((_, i) =>
+    dots.append(el("div", "dot " + (i < step ? "done" : i === step ? "now" : ""))));
+}
+$("w-next").onclick = () => {
+  if (step >= QUESTIONS.length) return start();
+  const item = QUESTIONS[step];
+  if (item.required && item.fields.some(([id]) => !$(id).value.trim())) {
+    $("w-hint").textContent = "This one is needed to plan anything.";
+    return;
+  }
+  step++; renderWizard();
+};
+$("w-back").onclick = () => { if (step > 0) { step--; renderWizard(); } };
+$("w-skip").onclick = () => { step++; renderWizard(); };
+
+document.querySelectorAll(".tab").forEach(tab => tab.onclick = () => {
+  document.querySelectorAll(".tab").forEach(t => {
+    t.classList.remove("on"); t.setAttribute("aria-selected", "false");
+  });
+  tab.classList.add("on"); tab.setAttribute("aria-selected", "true");
+  const mode = tab.dataset.mode;
+  $("wizard-mode").style.display = mode === "wizard" ? "" : "none";
+  $("ramble-mode").style.display = mode === "ramble" ? "" : "none";
+  $("form-mode").style.display = mode === "form" ? "" : "none";
+  $("go").style.display = mode === "form" ? "" : "none";
+  if (mode === "wizard") { step = 0; renderWizard(); }
+});
+
+/* ---------------- ramble mode ----------------
+   Speech is capture, extraction is the model's job: the Web Speech API fills
+   the transcript, and every pause re-extracts the WHOLE text server-side so a
+   later correction beats an earlier statement. The extracted fields land in
+   the same hidden form controls as the other two modes — one source of truth,
+   three ways to fill it. */
+const FIELD_LABELS = {
+  destination: ["Destination", v => v], start: ["From", v => v], end: ["To", v => v],
+  adults: ["Adults", v => v], children: ["Children", v => v],
+  budget: ["Budget", v => v], currency: ["Currency", v => v], pace: ["Pace", v => v],
+  early: ["Earliest start", v => v], late: ["Latest end", v => v],
+  transit: ["Max transit", v => v + " min"], free: ["Downtime", v => v + " min"],
+  walk: ["Max walking", v => v + " km/day"],
+  meals: ["Meals", v => v.join(", ")], prefs: ["Tastes", v => v.join(" · ")],
+  must: ["Must do", v => v.join(" · ")], diet: ["Dietary", v => v.join(", ")],
+};
+
+let recognition = null, listening = false, extractTimer = null, extractBusy = false;
+
+function applyExtracted(fields) {
+  const set = (id, v) => { if (v !== undefined) $(id).value = v; };
+  set("f-dest", fields.destination); set("f-start", fields.start); set("f-end", fields.end);
+  set("f-adults", fields.adults); set("f-children", fields.children);
+  set("f-budget", fields.budget); set("f-currency", fields.currency);
+  set("f-pace", fields.pace); set("f-early", fields.early); set("f-late", fields.late);
+  set("f-transit", fields.transit); set("f-free", fields.free); set("f-walk", fields.walk);
+  if (fields.meals) ["breakfast","lunch","dinner"].forEach(m =>
+    $("m-"+m).checked = fields.meals.includes(m));
+  if (fields.prefs) $("f-prefs").value = fields.prefs.join("\n");
+  if (fields.must) $("f-must").value = fields.must.join("\n");
+  if (fields.diet) $("f-diet").value = fields.diet.join("\n");
+}
+
+function renderBoard(fields, missing) {
+  const host = $("reqboard"); host.innerHTML = "";
+  const entries = Object.entries(FIELD_LABELS).filter(([k]) => fields[k] !== undefined);
+  if (!entries.length) {
+    host.append(el("div", "empty", "Requirements appear here as you talk."));
+  }
+  entries.forEach(([key, [label, fmt]]) => {
+    const row = el("div", "todo completed");
+    row.classList.remove("completed");           // reuse layout, not strikethrough
+    row.append(el("div", "mk", "✓"));
+    const body = el("div");
+    body.append(el("b", null, label + ": "));
+    body.append(document.createTextNode(fmt(fields[key])));
+    row.append(body);
+    host.append(row);
+  });
+  (missing || []).forEach(name => {
+    const row = el("div", "todo");
+    row.append(el("div", "mk", "○"));
+    row.append(el("div", null, name + " — still needed"));
+    host.append(row);
+  });
+  $("ramble-go").disabled = (missing || []).length > 0;
+}
+
+async function runExtract() {
+  const transcript = $("transcript").value.trim();
+  if (!transcript || extractBusy) return;
+  extractBusy = true;
+  $("mic-state").textContent = listening ? "listening… (extracting)" : "extracting…";
+  try {
+    const res = await fetch("/api/extract", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ transcript }),
+    });
+    const data = await res.json();
+    if (data.error) { $("followup").textContent = "extraction failed: " + data.error; return; }
+    applyExtracted(data.fields || {});
+    renderBoard(data.fields || {}, data.missing || []);
+    $("followup").textContent = data.follow_up ? "💬 " + data.follow_up : "";
+    if (data.follow_up && listening && "speechSynthesis" in window) {
+      // Ask the follow-up out loud — it's a conversation, not a form.
+      const utterance = new SpeechSynthesisUtterance(data.follow_up);
+      utterance.rate = 1.05;
+      speechSynthesis.cancel(); speechSynthesis.speak(utterance);
+    }
+  } catch (e) {
+    $("followup").textContent = "extraction failed: " + e;
+  } finally {
+    extractBusy = false;
+    $("mic-state").textContent = listening ? "listening…" : "";
+  }
+}
+
+function scheduleExtract() {
+  clearTimeout(extractTimer);
+  extractTimer = setTimeout(runExtract, 1200);
+}
+
+$("transcript").addEventListener("input", scheduleExtract);
+
+$("mic").onclick = () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    $("mic-state").textContent =
+      "This browser has no speech recognition — type into the transcript instead.";
+    return;
+  }
+  if (listening) { listening = false; recognition.stop(); return; }
+
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = false;   // finalised utterances only; less churn
+  recognition.lang = navigator.language || "en-US";
+  recognition.onresult = ev => {
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      if (!ev.results[i].isFinal) continue;
+      const text = ev.results[i][0].transcript.trim();
+      if (!text) continue;
+      const area = $("transcript");
+      area.value = area.value.trim() ? area.value.trim() + "\n" + text : text;
+    }
+    scheduleExtract();
+  };
+  recognition.onerror = ev => {
+    $("mic-state").textContent = ev.error === "not-allowed"
+      ? "Microphone blocked — allow it in the browser, or just type."
+      : "Speech error: " + ev.error + " — typing still works.";
+    listening = false; $("mic").textContent = "🎙 Start listening";
+  };
+  recognition.onend = () => {
+    if (listening) { try { recognition.start(); } catch {} return; }  // keep-alive
+    $("mic").textContent = "🎙 Start listening"; $("mic-state").textContent = "";
+  };
+  recognition.start();
+  listening = true;
+  $("mic").textContent = "⏹ Stop listening";
+  $("mic-state").textContent = "listening…";
+};
+
+$("ramble-go").onclick = () => { if (listening) recognition.stop(); listening = false; start(); };
+
+/* ---------------- feed ---------------- */
+function feedAdd(node) {
+  const feed = $("feed");
+  if (feed.querySelector(".empty")) feed.innerHTML = "";
+  feed.append(node);
+  feed.scrollTop = feed.scrollHeight;
+  return node;
+}
+function agentLabel(id) {
+  if (!id || id === "main") return null;
+  return agents.get(id) || "subagent";
+}
+function evNode(cls, icon, name, detail, pre) {
+  const nested = cls.includes("nested");
+  const row = el("div", "ev " + cls);
+  row.append(el("div", "ico", icon));
+  const body = el("div", "body");
+  if (name) body.append(el("div", "name", name));
+  if (detail) body.append(el("div", "det", detail));
+  if (pre) body.append(el("div", "det pre", pre));
+  row.append(body);
+  void nested;
+  return row;
+}
+function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.className = "status " + (cls||""); }
+
+/* ---------------- human in the loop ---------------- */
+function renderInterrupt(actions) {
+  const card = el("div", "hitl");
+  card.append(el("h3", null, "Your call"));
+  actions.forEach((a, i) => {
+    card.append(el("div", "det", a.description || a.name));
+    const pre = el("pre", null, JSON.stringify(a.args, null, 2));
+    card.append(pre);
+
+    const acts = el("div", "acts");
+    const allowed = a.allowed && a.allowed.length ? a.allowed : ["approve", "reject"];
+    const decide = (payload) => {
+      card.querySelectorAll("button").forEach(b => b.disabled = true);
+      fetch(`/api/decide/${runId}`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ decisions: [payload] }),
+      }).catch(e => feedAdd(evNode("t-err", "!", "decide failed", String(e))));
+    };
+
+    if (allowed.includes("approve")) {
+      const b = el("button", "primary sm", "Approve");
+      b.onclick = () => decide({ type: "approve" });
+      acts.append(b);
+    }
+    if (allowed.includes("edit")) {
+      const b = el("button", "sm", "Edit & approve");
+      b.onclick = () => {
+        try { decide({ type: "edit", args: JSON.parse(pre.textContent) }); }
+        catch { alert("The edited arguments are not valid JSON."); }
+      };
+      pre.contentEditable = "true";
+      pre.style.borderColor = "#3d5a8a";
+      acts.append(b);
+    }
+    if (allowed.includes("respond")) {
+      const b = el("button", "sm", "Answer instead");
+      b.onclick = () => {
+        const msg = prompt("What should the agent be told?");
+        if (msg) decide({ type: "respond", message: msg });
+      };
+      acts.append(b);
+    }
+    if (allowed.includes("reject")) {
+      const b = el("button", "danger sm", "Send back");
+      b.onclick = () => {
+        const msg = prompt("What should it change?", "");
+        decide({ type: "reject", message: msg || "" });
+      };
+      acts.append(b);
+    }
+    card.append(acts);
+    void i;
+  });
+  feedAdd(card);
+}
+
+/* ---------------- verdict ---------------- */
+function renderVerdict(d) {
+  const card = el("div", "verdict " + (d.passed ? "pass" : "fail"));
+  card.append(el("h3", null, d.passed ? "Passed every hard constraint" : "Did not pass"));
+  if (d.error) card.append(el("div", "det", d.error));
+  if (d.feasible === false)
+    card.append(el("div", "det", "Reported infeasible: " + (d.infeasibility_reason || "")));
+
+  const m = d.metrics || {};
+  const shown = ["hard_pass_rate","soft_pass_rate","total_cost","budget_overrun_pct",
+                 "must_do_coverage","grounded_pct"].filter(k => k in m);
+  if (shown.length) {
+    const row = el("div", "metrics");
+    shown.forEach(k => row.append(el("span", null, `${k} ${(+m[k]).toFixed(2).replace(/\.00$/,"")}`)));
+    row.append(el("span", null, `check calls ${d.check_calls ?? 0}`));
+    card.append(row);
+  }
+  (d.violations || []).forEach(v => {
+    const line = el("div", "viol " + v.severity);
+    line.append(el("b", null, v.severity + " " + v.check + " "));
+    line.append(document.createTextNode(v.message + (v.where ? ` (${v.where})` : "")));
+    card.append(line);
+  });
+  if (d.has_itinerary) {
+    const links = el("div", "links");
+    ["itinerary.md","itinerary.json","constraints.json","sources.md"].forEach(n => {
+      const a = el("a", null, n);
+      a.href = `/api/runs/${runId}/artifact/${n}`; a.target = "_blank";
+      links.append(a);
+    });
+    card.append(links);
+  }
+  feedAdd(card);
+}
+
+/* ---------------- map ----------------
+   Lazy: the map takes real pixels, so it only appears once there is something
+   to put on it — the first geocode hit during research, or the final route. */
+let map = null, researchLayer = null, dayLayers = [], markerByCard = new Map();
+const DAY_COLORS = ["#6ee7a0", "#60a5fa", "#fbbf24", "#a78bfa", "#f87171", "#34d399", "#f472b6"];
+
+function ensureMap() {
+  if (map) return map;
+  $("map").classList.add("on");
+  map = L.map("map", { zoomControl: true, attributionControl: true })
+       .setView([48, 8], 4);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 19,
+  }).addTo(map);
+  researchLayer = L.layerGroup().addTo(map);
+  // The pane opens with a CSS height transition, so any fitBounds issued
+  // before the transition finishes runs against a 0-height container and
+  // resolves to zoom 0 — a world map with the route as one dot. The fix is to
+  // remember the last requested fit and re-apply it whenever the container
+  // actually gains its size.
+  new ResizeObserver(() => {
+    map.invalidateSize();
+    if (pendingFit && map.getSize().y > 0) {
+      map.fitBounds(pendingFit.bounds, pendingFit.options);
+    }
+  }).observe($("map"));
+  return map;
+}
+
+let pendingFit = null;
+function fitSafely(bounds, options) {
+  if (!bounds || !bounds.isValid()) return;
+  pendingFit = { bounds, options };
+  map.invalidateSize();
+  if (map.getSize().y > 0) map.fitBounds(bounds, options);
+  // else: the ResizeObserver replays this fit once the pane has real height.
+}
+
+let researchBounds = null, fitTimer = null;
+function plotResearch(d) {
+  ensureMap();
+  const dot = L.circleMarker([d.lat, d.lon], {
+    radius: 4, weight: 1, color: "#5c6478", fillColor: "#8b93a7", fillOpacity: .55,
+  }).bindTooltip(d.name, { direction: "top", opacity: .85 });
+  researchLayer.addLayer(dot);
+  researchBounds = (researchBounds || L.latLngBounds([])).extend([d.lat, d.lon]);
+  // Throttle: geocodes arrive in bursts and fitBounds on each one makes the
+  // map lurch. One settle per burst reads as "the agents are exploring".
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() =>
+    fitSafely(researchBounds.pad(0.25), { maxZoom: 14, animate: true }), 350);
+}
+
+function clearJourney() {
+  dayLayers.forEach(l => map && map.removeLayer(l.group));
+  dayLayers = []; markerByCard = new Map();
+  $("daytabs").innerHTML = ""; $("cardrow").innerHTML = "";
+  $("journey").classList.remove("on");
+}
+
+/* ---------------- journey cards ---------------- */
+function hoursChip(item, dayDate) {
+  const hours = item.venue?.opening_hours?.week;
+  if (!hours) return null;
+  const wd = ["mon","tue","wed","thu","fri","sat","sun"][new Date(dayDate + "T12:00").getDay() === 0 ? 6 : new Date(dayDate + "T12:00").getDay() - 1];
+  const ranges = hours[wd];
+  if (ranges === undefined) return null;
+  if (!ranges.length) return { text: "closed " + wd, cls: "chip" };
+  return { text: ranges.map(r => `${r.open}–${r.close}`).join(", "), cls: "chip hours" };
+}
+
+function selectDay(idx) {
+  document.querySelectorAll(".daytab").forEach((t, i) => t.classList.toggle("on", i === idx));
+  dayLayers.forEach((l, i) => {
+    if (i === idx) { l.group.addTo(map); fitSafely(l.bounds.pad(0.2), { maxZoom: 15 }); }
+    else map.removeLayer(l.group);
+  });
+  renderCards(idx);
+}
+
+let journeyData = null;
+function renderCards(dayIdx) {
+  const row = $("cardrow"); row.innerHTML = "";
+  const day = journeyData.days[dayIdx];
+  const color = DAY_COLORS[dayIdx % DAY_COLORS.length];
+  day.items.forEach((item, i) => {
+    const leg = item.transit_from_previous;
+    if (leg) {
+      const wrap = el("div", "legwrap");
+      wrap.append(el("div", "leg",
+        `─ ${leg.minutes}min ${leg.mode}${leg.distance_km ? " · " + leg.distance_km.toFixed(1) + "km" : ""} →`));
+      row.append(wrap);
+    }
+    const card = el("div", "jcard");
+    card.id = `jcard-${dayIdx}-${i}`;
+    card.append(el("div", "when", `${item.start}–${item.end}`));
+    card.append(el("div", "title", item.title));
+    if (item.note || item.venue?.address)
+      card.append(el("div", "note", item.note || item.venue.address));
+    const chips = el("div", "chips");
+    chips.append(el("span", "chip kind-" + item.kind, item.kind === "meal" ? (item.meal_slot || "meal") : item.kind));
+    if (item.estimated_cost > 0)
+      chips.append(el("span", "chip cost", `${item.estimated_cost} ${journeyData.currency}`));
+    const rating = item.venue?.rating;
+    if (rating) chips.append(el("span", "chip stars",
+      `★ ${rating.score.toFixed(1)}${rating.count ? " (" + rating.count.toLocaleString() + ")" : ""}`));
+    const hrs = hoursChip(item, day.date);
+    if (hrs) chips.append(el("span", hrs.cls, hrs.text));
+    card.append(chips);
+    if (item.sources?.length) {
+      const a = el("a", null, "source ↗"); a.href = item.sources[0]; a.target = "_blank";
+      a.onclick = e => e.stopPropagation();
+      card.append(a);
+    }
+    card.onclick = () => {
+      const marker = markerByCard.get(card.id);
+      if (marker) { map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15)); marker.openPopup(); }
+      document.querySelectorAll(".jcard.hot").forEach(c => c.classList.remove("hot"));
+      card.classList.add("hot");
+    };
+    row.append(card);
+    void color;
+  });
+}
+
+function renderJourney(itin) {
+  if (!itin.days?.length) return;
+  journeyData = itin;
+  ensureMap(); clearJourney();
+  $("journey").classList.add("on");
+  if (researchLayer) researchLayer.eachLayer(l => l.setStyle({ fillOpacity: .18, opacity: .3 }));
+
+  itin.days.forEach((day, di) => {
+    const color = DAY_COLORS[di % DAY_COLORS.length];
+    const group = L.layerGroup();
+    const path = [];
+    day.items.forEach((item, ii) => {
+      const v = item.venue;
+      if (v?.lat == null || v?.lon == null) return;
+      path.push([v.lat, v.lon]);
+      const marker = L.marker([v.lat, v.lon], {
+        icon: L.divIcon({
+          className: "", iconSize: [24, 24], iconAnchor: [12, 12],
+          html: `<div class="num-pin" style="background:${color}">${path.length}</div>`,
+        }),
+      }).bindPopup(
+        `<b>${item.start}</b> ${item.title}` +
+        (item.venue?.rating
+          ? `<br>★ ${item.venue.rating.score.toFixed(1)}` +
+            (item.venue.rating.count ? ` · ${item.venue.rating.count.toLocaleString()} reviews` : "")
+          : ""));
+      marker.on("click", () => {
+        const card = $(`jcard-${di}-${ii}`);
+        if (card) { card.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+          document.querySelectorAll(".jcard.hot").forEach(c => c.classList.remove("hot"));
+          card.classList.add("hot"); }
+      });
+      group.addLayer(marker);
+      markerByCard.set(`jcard-${di}-${ii}`, marker);
+    });
+    if (path.length > 1)
+      group.addLayer(L.polyline(path, { color, weight: 3, opacity: .75, dashArray: "6 8" }));
+    dayLayers.push({ group, bounds: L.latLngBounds(path) });
+
+    const tab = el("button", "daytab" + (di === 0 ? " on" : ""));
+    tab.style.color = di === 0 ? color : "";
+    const dotc = el("span", "dotc"); dotc.style.background = color;
+    tab.append(dotc, document.createTextNode(
+      new Date(day.date + "T12:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })));
+    tab.onclick = () => { document.querySelectorAll(".daytab").forEach(t => t.style.color = "");
+      tab.style.color = color; selectDay(di); };
+    $("daytabs").append(tab);
+  });
+
+  const spacer = el("div"); spacer.style.flex = "1";
+  $("daytabs").append(spacer);
+  const pdf = el("button", "daytab", "⇩ Export PDF");
+  pdf.onclick = exportPdf;
+  $("daytabs").append(pdf);
+
+  selectDay(0);
+}
+
+/* ---------------- printable itinerary ----------------
+   Compiles the same journey data into a paginated document: per-day route
+   tables with the transit legs written between the stops, ratings as a
+   decision-criteria column, and per-day totals for cost, walking and transit.
+   Built from `journeyData`, so it can never disagree with the map. */
+function compileDay(day) {
+  let cost = 0, walkKm = 0, transitMin = 0;
+  day.items.forEach(item => {
+    cost += item.estimated_cost || 0;
+    const leg = item.transit_from_previous;
+    if (!leg) return;
+    transitMin += leg.minutes || 0;
+    if (leg.mode === "walk") walkKm += leg.distance_km || 0;
+  });
+  return { cost, walkKm, transitMin };
+}
+
+function buildPrintable() {
+  const host = $("printable");
+  host.innerHTML = "";
+  if (!journeyData) return;
+
+  const spec = specFromForm();
+  const days = journeyData.days || [];
+  host.append(el("h1", "pr-h1", journeyData.destination || spec.destination));
+
+  const first = days[0]?.date, last = days[days.length - 1]?.date;
+  const fmtDate = d => new Date(d + "T12:00").toLocaleDateString(undefined,
+    { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+  const party = spec.party.adults + (spec.party.children || 0);
+  host.append(el("div", "pr-sub",
+    (first ? fmtDate(first) + (last && last !== first ? " – " + fmtDate(last) : "") : "") +
+    ` · ${days.length} day${days.length === 1 ? "" : "s"} · ${party} traveller${party === 1 ? "" : "s"}`));
+
+  if (journeyData.notes) host.append(el("div", "pr-note", journeyData.notes));
+
+  let grandCost = 0;
+  days.forEach((day, di) => {
+    const block = el("div", "pr-day");
+    block.append(el("div", "pr-dayh", fmtDate(day.date)));
+    if (day.summary) block.append(el("div", "pr-daysum", day.summary));
+
+    const table = el("table", "pr");
+    const head = el("tr");
+    ["Time", "Stop", "Rating", "Cost"].forEach(h => head.append(el("th", null, h)));
+    table.append(head);
+
+    let n = 0;
+    day.items.forEach(item => {
+      const leg = item.transit_from_previous;
+      if (leg) {
+        const row = el("tr", "leg");
+        const cell = el("td", null,
+          `↓ ${leg.minutes} min by ${leg.mode}` +
+          (leg.distance_km ? ` · ${leg.distance_km.toFixed(1)} km` : "") +
+          (leg.note ? ` — ${leg.note}` : ""));
+        cell.colSpan = 4;
+        row.append(cell); table.append(row);
+      }
+      const row = el("tr");
+      row.append(el("td", "pr-when", `${item.start}–${item.end}`));
+
+      const what = el("td");
+      const title = el("div", "pr-title");
+      if (item.venue) { n += 1; title.append(el("span", "pr-num", String(n))); }
+      title.append(document.createTextNode(item.title));
+      what.append(title);
+      const bits = [];
+      if (item.venue?.address) bits.push(item.venue.address);
+      if (item.note) bits.push(item.note);
+      if (bits.length) what.append(el("div", "pr-meta", bits.join(" · ")));
+      row.append(what);
+
+      const rating = item.venue?.rating;
+      row.append(el("td", "pr-stars", rating
+        ? `★ ${rating.score.toFixed(1)}` +
+          (rating.count ? ` (${rating.count.toLocaleString()})` : "")
+        : "—"));
+
+      row.append(el("td", null, item.estimated_cost
+        ? `${item.estimated_cost} ${journeyData.currency}` : "—"));
+      table.append(row);
+    });
+    block.append(table);
+
+    const totals = compileDay(day);
+    grandCost += totals.cost;
+    block.append(el("div", "pr-totals",
+      `Day total ${totals.cost.toFixed(0)} ${journeyData.currency}` +
+      ` · ${totals.walkKm.toFixed(1)} km on foot` +
+      ` · ${totals.transitMin} min in transit`));
+    host.append(block);
+    void di;
+  });
+
+  const foot = el("div", "pr-foot");
+  foot.append(el("div", null,
+    `Total estimated cost ${grandCost.toFixed(0)} ${journeyData.currency}` +
+    (spec.budget.total ? ` of a ${spec.budget.total} ${spec.budget.currency} budget` : "")));
+  foot.append(el("div", null,
+    "Nothing here is booked. Times, prices and ratings are estimates read from " +
+    "public sources on " + new Date().toLocaleDateString() + " — confirm before you commit money."));
+
+  const sources = new Set();
+  journeyData.days.forEach(d => d.items.forEach(i => {
+    (i.sources || []).forEach(s => sources.add(s));
+    if (i.venue?.rating?.source) sources.add(i.venue.rating.source);
+  }));
+  if (sources.size) {
+    foot.append(el("div", null, " "));
+    foot.append(el("div", null, "Sources:"));
+    [...sources].sort().forEach(s => foot.append(el("div", "pr-src", s)));
+  }
+  host.append(foot);
+}
+
+function exportPdf() {
+  buildPrintable();
+  // The browser's own print dialog does PDF better than any bundled library,
+  // and keeps the export dependency-free.
+  window.print();
+}
+
+async function loadJourney() {
+  try {
+    const res = await fetch(`/api/runs/${runId}/artifact/itinerary.json`);
+    if (!res.ok) return;
+    renderJourney(await res.json());
+  } catch (e) { console.warn("journey unavailable:", e); }
+}
+
+/* ---------------- run ---------------- */
+const HANDLERS = {
+  "run.started": d => {
+    feedAdd(evNode("t-text", "▸", "planning " + d.destination, d.config));
+    setStatus("running", "running");
+  },
+  "agent.text": d => {
+    const sub = agentLabel(d.agent);
+    feedAdd(evNode("t-text" + (sub ? " nested" : ""), "·", sub || null, d.text));
+  },
+  "tool.call": d => {
+    const sub = agentLabel(d.agent);
+    feedAdd(evNode("t-tool" + (sub ? " nested" : ""), "→", d.name, d.summary));
+  },
+  "tool.result": d => {
+    if (d.ok) return;
+    feedAdd(evNode("t-err", "×", d.name + " failed", d.preview));
+  },
+  "subagent.start": d => {
+    agents.set(d.id, d.subagent);
+    feedAdd(evNode("t-sub", "⑂", "dispatch → " + d.subagent, d.task));
+  },
+  "subagent.end": d => {
+    feedAdd(evNode("t-sub", "⑃", "report ← " + (agents.get(d.id) || "subagent"), null, d.report));
+  },
+  "todos": d => {
+    const host = $("todos"); host.innerHTML = "";
+    if (!d.items.length) { host.append(el("div","empty","No todos yet.")); return; }
+    d.items.forEach(t => {
+      const row = el("div", "todo " + t.status);
+      row.append(el("div", "mk", t.status === "completed" ? "✓" : t.status === "in_progress" ? "▸" : "○"));
+      row.append(el("div", null, t.content));
+      host.append(row);
+    });
+  },
+  "check": d => {
+    const node = evNode("t-check" + (d.passed ? "" : " fail"), d.passed ? "✓" : "✗",
+      d.tool, d.summary.split("\n")[0]);
+    feedAdd(node);
+    (d.violations || []).slice(0, 12).forEach(v => {
+      const line = el("div", "viol " + v.severity);
+      line.append(el("b", null, v.severity + " " + v.check + " "));
+      line.append(document.createTextNode(v.message));
+      node.querySelector(".body").append(line);
+    });
+  },
+  "geo": d => plotResearch(d),
+  "run.waiting": d => { setStatus("waiting for you", "waiting"); renderInterrupt(d.actions || []); },
+  "run.resumed": () => setStatus("running", "running"),
+  "run.finished": d => { renderVerdict(d); setStatus("finished", "finished");
+                         if (d.has_itinerary && d.feasible !== false) loadJourney(); },
+  "run.error": d => { feedAdd(evNode("t-err", "!", "run error", d.message)); setStatus("error", "error"); },
+  "run.done": () => { source?.close(); $("go").disabled = false; $("w-next").disabled = false; },
+};
+
+async function start() {
+  const spec = specFromForm();
+  if (!spec.destination || !spec.dates.start || !spec.dates.end) {
+    alert("Destination and both dates are needed."); return;
+  }
+  $("feed").innerHTML = ""; agents = new Map();
+  // A fresh run gets a fresh map: drop the old route and research dots.
+  if (map) { clearJourney(); researchLayer.clearLayers(); researchBounds = null; }
+  journeyData = null;
+  $("go").disabled = true; $("w-next").disabled = true;
+  setStatus("starting", "running");
+
+  const interrupts = [...document.querySelectorAll("#o-interrupts input:checked")]
+    .map(i => i.value);
+
+  let res;
+  try {
+    res = await fetch("/api/plan", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        spec, model: $("o-model").value,
+        subagents: $("o-sub").checked, skills: $("o-skills").checked,
+        repair: $("o-repair").checked, interrupt_on: interrupts,
+      }),
+    });
+  } catch (e) {
+    setStatus("error", "error");
+    feedAdd(evNode("t-err", "!", "could not reach the server", String(e)));
+    $("go").disabled = false; $("w-next").disabled = false; return;
+  }
+  if (!res.ok) {
+    const body = await res.text();
+    setStatus("error", "error");
+    feedAdd(evNode("t-err", "!", "rejected (" + res.status + ")", body));
+    $("go").disabled = false; $("w-next").disabled = false; return;
+  }
+  runId = (await res.json()).run_id;
+
+  source = new EventSource(`/api/stream/${runId}`);
+  source.onmessage = e => {
+    const d = JSON.parse(e.data);
+    (HANDLERS[d.type] || (() => {}))(d);
+  };
+  source.onerror = () => { setStatus("disconnected", "error"); source.close();
+                           $("go").disabled = false; $("w-next").disabled = false; };
+}
+$("go").onclick = start;
+
+/* ---------------- boot ---------------- */
+(async () => {
+  const tools = ["finalize_itinerary","check_itinerary","web_search","task",
+                 "geocode","estimate_travel","fx_convert"];
+  const host = $("o-interrupts");
+  tools.forEach(t => {
+    const wrap = el("div", "check");
+    const box = el("input"); box.type = "checkbox"; box.value = t;
+    box.checked = t === "finalize_itinerary";
+    wrap.append(box, el("span", null, t));
+    host.append(wrap);
+  });
+
+  try {
+    const cases = await (await fetch("/api/examples")).json();
+    const sel = $("examples");
+    cases.forEach(c => {
+      const o = el("option", null, `${c.name} · ${c.category}`);
+      o.value = c.name; sel.append(o);
+    });
+    sel.onchange = () => {
+      const found = cases.find(c => c.name === sel.value);
+      if (found) { fillForm(found.spec); if (step) { step = 0; renderWizard(); } }
+    };
+  } catch (e) {
+    // Examples are a convenience, not a requirement — but say so out loud.
+    // A silent catch here once hid a broken dropdown for far too long.
+    console.warn("examples unavailable:", e);
+  }
+
+  try {
+    const past = await (await fetch("/api/history")).json();
+    const hist = $("history");
+    past.forEach(p => {
+      const mark = p.feasible === false ? "⃠" : p.passed === false ? "✗" : "✓";
+      const o = el("option", null, `${mark} ${p.destination} · ${p.days ?? "?"}d`);
+      o.value = p.run_id; hist.append(o);
+    });
+    hist.onchange = () => {
+      if (!hist.value) return;
+      runId = hist.value;
+      $("feed").innerHTML = "";
+      feedAdd(evNode("t-text", "▸", "reopened past run", hist.value));
+      loadJourney();
+    };
+  } catch (e) { console.warn("history unavailable:", e); }
+
+  const today = new Date(Date.now() + 60 * 864e5).toISOString().slice(0, 10);
+  const later = new Date(Date.now() + 63 * 864e5).toISOString().slice(0, 10);
+  $("f-start").value = today; $("f-end").value = later;
+  renderWizard();
+})();
+</script>
+</body>
+</html>

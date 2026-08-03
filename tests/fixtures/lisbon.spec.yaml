@@ -1,0 +1,28 @@
+# Fixture spec. Deliberately small (two days) and deliberately dense: every
+# structured constraint is set, so the dirty fixture has something to violate
+# on every check.
+destination: Lisbon, Portugal
+dates:
+  start: 2026-10-12   # Monday
+  end: 2026-10-13     # Tuesday
+party:
+  adults: 2
+budget:
+  currency: EUR
+  total: 600
+  excludes: [flights]
+pace: relaxed
+constraints:
+  earliest_start: "10:00"
+  latest_end: "23:00"
+  max_transit_minutes: 35
+  min_free_block_minutes: 120
+  required_meals: [dinner]
+soft_preferences:
+  - miradouros over museums
+  - neighbourhood restaurants over tourist-facing ones
+must_do:
+  - Time Out Market
+dietary: [pescatarian]
+mobility:
+  max_walk_km_per_day: 8

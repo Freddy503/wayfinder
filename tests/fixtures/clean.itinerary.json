@@ -1,0 +1,122 @@
+{
+  "destination": "Lisbon, Portugal",
+  "currency": "EUR",
+  "feasible": true,
+  "notes": "Two unhurried days: one Alfama/Graça side, one Belém side.",
+  "days": [
+    {
+      "date": "2026-10-12",
+      "summary": "Viewpoints in the east, dinner at the market.",
+      "items": [
+        {
+          "start": "10:30",
+          "end": "12:00",
+          "kind": "activity",
+          "title": "Miradouro da Senhora do Monte",
+          "estimated_cost": 0,
+          "sources": ["https://www.visitlisboa.com/miradouro-senhora-do-monte"],
+          "venue": {
+            "name": "Miradouro da Senhora do Monte",
+            "lat": 38.7186,
+            "lon": -9.1329,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "00:00", "close": "23:59" }] }
+            }
+          }
+        },
+        {
+          "start": "14:30",
+          "end": "16:00",
+          "kind": "activity",
+          "title": "Museu Nacional do Azulejo",
+          "estimated_cost": 20,
+          "sources": ["https://www.museudoazulejo.gov.pt/"],
+          "transit_from_previous": { "mode": "walk", "minutes": 20, "distance_km": 1.4 },
+          "venue": {
+            "name": "Museu Nacional do Azulejo",
+            "lat": 38.7247,
+            "lon": -9.1136,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "10:00", "close": "18:00" }] }
+            }
+          }
+        },
+        {
+          "start": "19:30",
+          "end": "21:00",
+          "kind": "meal",
+          "meal_slot": "dinner",
+          "title": "Dinner at Time Out Market",
+          "estimated_cost": 55,
+          "sources": ["https://www.timeoutmarket.com/lisboa/"],
+          "transit_from_previous": { "mode": "transit", "minutes": 25 },
+          "venue": {
+            "name": "Time Out Market",
+            "lat": 38.7071,
+            "lon": -9.1459,
+            "opening_hours": {
+              "week": { "mon": [{ "open": "10:00", "close": "23:59" }] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-13",
+      "summary": "Belém in the morning, seafood at night.",
+      "items": [
+        {
+          "start": "10:15",
+          "end": "12:15",
+          "kind": "activity",
+          "title": "Torre de Belém",
+          "estimated_cost": 16,
+          "sources": ["https://www.torrebelem.gov.pt/"],
+          "venue": {
+            "name": "Torre de Belem",
+            "lat": 38.6916,
+            "lon": -9.216,
+            "opening_hours": {
+              "week": { "tue": [{ "open": "10:00", "close": "17:30" }] }
+            }
+          }
+        },
+        {
+          "start": "14:45",
+          "end": "16:15",
+          "kind": "activity",
+          "title": "Mosteiro dos Jeronimos",
+          "estimated_cost": 24,
+          "sources": ["https://www.mosteirojeronimos.gov.pt/"],
+          "transit_from_previous": { "mode": "walk", "minutes": 15, "distance_km": 1.1 },
+          "venue": {
+            "name": "Mosteiro dos Jeronimos",
+            "lat": 38.6979,
+            "lon": -9.2065,
+            "opening_hours": {
+              "week": { "tue": [{ "open": "10:00", "close": "17:30" }] }
+            }
+          }
+        },
+        {
+          "start": "19:45",
+          "end": "21:15",
+          "kind": "meal",
+          "meal_slot": "dinner",
+          "title": "Dinner at Cervejaria Ramiro",
+          "estimated_cost": 70,
+          "sources": ["https://www.cervejariaramiro.com/"],
+          "transit_from_previous": { "mode": "transit", "minutes": 30 },
+          "venue": {
+            "name": "Cervejaria Ramiro",
+            "lat": 38.7211,
+            "lon": -9.1367,
+            "opening_hours": {
+              "week": { "tue": [{ "open": "12:00", "close": "23:30" }] }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "wayfinder-web",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "wayfinder", "serve", "--port", "8100"],
+      "port": 8100
+    }
+  ]
+}
