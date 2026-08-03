@@ -11,6 +11,21 @@ from wayfinder.specs import load_itinerary_payload, load_spec
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path, monkeypatch):
+    """Point the disk cache at a throwaway directory for every test.
+
+    `@cached` persists to `.cache/` next to the project, which real runs fill
+    with real search results. Without this, a test asserting on a stubbed
+    response can silently be served a fixture from last Tuesday's Lisbon run —
+    and it fails or passes depending on what you happened to run before it.
+    `CACHE_DIR` is resolved at import time, so the env var alone is too late.
+    """
+    from wayfinder.tools import cache
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+
+
 @pytest.fixture
 def spec() -> TripSpec:
     return load_spec(FIXTURES / "lisbon.spec.yaml")

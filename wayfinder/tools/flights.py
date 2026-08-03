@@ -73,29 +73,73 @@ def _research(origin: str, destination: str, when: str, kind: str) -> dict:
     return web_search(query, max_results=6)
 
 
-def flight_search(origin: str, destination: str, date: str, direction: str = "outbound") -> dict:
-    """Research flights between two cities on a given date.
+def flight_search(
+    origin: str,
+    destination: str,
+    date: str,
+    direction: str = "outbound",
+    adults: int = 1,
+    children: int = 0,
+) -> dict:
+    """Search flights between two cities on a given date.
 
     Call this once per direction, early — the outbound landing time and the
     return departure time constrain what can be scheduled on the first and last
     days, and the checker enforces that. Planning the days first and the
     flights afterwards means replanning both.
 
-    Results are **indicative, not bookable**: typical routes, airlines,
-    durations and fares gathered from public sources. Record what you find in
-    the itinerary's `flights` with its `sources`, and put any uncertainty in
-    the flight's `note` rather than presenting a guess as fact.
+    Two sources, transparently: when RouteStack is configured you get **live
+    inventory** — real carriers, flight numbers, times and fares, with a
+    `checkout` handle the traveller can open themselves. Otherwise it falls
+    back to **indicative** figures gathered from public pages. The response
+    says which you got in `source`; carry that honesty into the flight's
+    `note` rather than presenting an indicative fare as a real one.
+
+    Never book. A checkout link is for the traveller to open and decide on.
 
     Args:
         origin: Departure city or airport, e.g. "Berlin" or "BER".
         destination: Arrival city or airport, e.g. "Lisbon".
         date: Travel date, `YYYY-MM-DD`.
         direction: "outbound" or "return" — used to shape the query.
+        adults: Adult passengers.
+        children: Child passengers.
 
     Returns:
-        `{"found", "routes": [{"airports", "price", "currency",
-        "duration_minutes", "title", "url", "snippet"}], "caveat"}`.
+        `{"source": "live"|"indicative", "found", ...}` — live results carry
+        `offers` and `correlation_id`; indicative ones carry `routes`,
+        `price_range` and a `caveat`.
     """
+    from wayfinder.tools.routestack import is_configured, live_flight_search
+
+    if is_configured():
+        live = live_flight_search(
+            origin, destination, date, adults=adults, children=children
+        )
+        if live.get("available") and live.get("flights"):
+            currency = live.get("currency", "USD")
+            return {
+                "source": "live",
+                "found": True,
+                "origin": origin,
+                "destination": destination,
+                "date": date,
+                "direction": direction,
+                "currency": currency,
+                "offer_count": live.get("offer_count"),
+                # Already in the itinerary's `flights` shape — drop one in
+                # directly rather than reassembling times from raw segments.
+                "flights": [dict(f, direction=direction) for f in live["flights"]],
+                "correlation_id": live.get("correlation_id"),
+                "note": (
+                    f"Live availability, priced in {currency}. Convert with fx_convert "
+                    "if the budget uses another currency. Fields prefixed with '_' are "
+                    "handles, not itinerary fields — drop them before writing. "
+                    "Nothing is booked; a checkout link is the traveller's to open."
+                ),
+            }
+        # Configured but empty or erroring: fall through rather than fail the run.
+
     kind = "direct flight time price" if direction == "outbound" else "return flight time price"
     payload = _research(origin.strip(), destination.strip(), date.strip(), kind)
 
@@ -117,6 +161,7 @@ def flight_search(origin: str, destination: str, date: str, direction: str = "ou
 
     priced = [r for r in routes if r["price"] is not None]
     return {
+        "source": "indicative",
         "found": bool(routes),
         "origin": origin,
         "destination": destination,
