@@ -140,11 +140,84 @@ def test_session_exposes_exactly_one_tool_matching_the_form():
         assert field in props
 
 
-def test_instructions_state_the_three_essentials():
+def test_instructions_name_every_topic_it_must_cover():
     text = realtime.INTERVIEWER_INSTRUCTIONS.lower()
-    assert "budget" in text and "where" in text
+    for word in ("departure", "destination", "dates", "travellers", "budget",
+                 "tastes", "must do", "dietary"):
+        assert word in text, f"the interviewer is never told to ask about {word}"
     assert "one question at a time" in text
     assert "later answer wins" in text, "self-correction has to survive speech"
+    assert "all eight topics" in text, "the stopping rule has to name the bar"
+
+
+def test_the_tool_can_express_a_topic_asked_and_answered_with_nothing():
+    """Without `covered`, "no dietary restrictions" is indistinguishable from
+    never having asked — and the interviewer asks forever."""
+    props = realtime.RECORD_TOOL["parameters"]["properties"]
+    assert set(props["covered"]["items"]["enum"]) == set(realtime.TOPIC_IDS)
+
+
+def test_every_topic_maps_to_fields_the_tool_accepts():
+    props = realtime.RECORD_TOOL["parameters"]["properties"]
+    for topic, _, keys in realtime.TOPICS:
+        assert keys, f"{topic} has no fields"
+        for key in keys:
+            assert key in props, f"{topic} claims {key}, which cannot be recorded"
+
+
+def test_nothing_asked_yet():
+    assert realtime.uncovered_topics({}) == list(realtime.TOPIC_IDS)
+
+
+def test_a_filled_field_covers_its_topic():
+    """The safety net: a model that forgets `covered` still shows progress."""
+    assert "destination" not in realtime.uncovered_topics({"destination": "Lisbon"})
+    assert "dates" not in realtime.uncovered_topics({"start": "2026-10-12"})
+
+
+def test_an_explicit_none_covers_a_topic_that_sets_no_field():
+    assert "dietary" in realtime.uncovered_topics({})
+    assert "dietary" not in realtime.uncovered_topics({}, covered=["dietary"])
+    assert "dietary" not in realtime.uncovered_topics({"diet": []}, covered=["dietary"])
+
+
+def test_zero_children_is_an_answer_not_a_silence():
+    assert "travellers" not in realtime.uncovered_topics({"adults": 2, "children": 0})
+
+
+def test_an_empty_list_alone_does_not_count_as_asked():
+    """`must: []` is what you get from a model that sends the field
+    reflexively; only an explicit `covered` proves the question was put."""
+    assert "must_do" in realtime.uncovered_topics({"must": []})
+
+
+def test_junk_in_covered_is_ignored():
+    assert realtime.uncovered_topics({}, covered=[None, 7, "nonsense"]) == list(
+        realtime.TOPIC_IDS
+    )
+
+
+def test_planning_is_gated_more_narrowly_than_the_interview():
+    """The two gates must not be conflated: blocking Plan on the full
+    checklist would strand anyone with no dietary restrictions."""
+    answered = {"destination": "Lisbon", "start": "2026-10-12", "end": "2026-10-16",
+                "budget": 900}
+    assert realtime.missing_essentials(answered) == []
+    assert realtime.uncovered_topics(answered), "the interview is not done yet"
+
+
+def test_topics_endpoint_serves_the_checklist_without_minting_a_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from wayfinder.server import create_app
+
+    def fail(*a, **kw):
+        raise AssertionError("rendering the checklist must not call OpenAI")
+
+    monkeypatch.setattr("httpx.post", fail)
+    body = TestClient(create_app()).get("/api/realtime/topics").json()
+    assert [t["id"] for t in body["topics"]] == list(realtime.TOPIC_IDS)
+    assert body["configured"] is False
 
 
 def test_the_api_key_never_appears_in_what_the_browser_receives(monkeypatch):

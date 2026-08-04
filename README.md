@@ -84,10 +84,18 @@ Three ways to describe a trip, all writing into the same `TripSpec`:
 - **Form** — structured fields.
 - **Questions** — a 13-step wizard, client-side and deterministic.
 - **🎙 Ramble** — a spoken conversation. Hit *Start conversation* and a voice
-  interviewer asks about the trip until it has enough to plan, one question at
-  a time, filling the board as you answer. Corrections win: *"four hundred
-  euros… no, make it six hundred"* lands as €600. Plan stays disabled until
-  destination, dates and budget are all in.
+  interviewer works through eight topics — departure, destination, dates,
+  travellers, budget, tastes, must-dos, dietary — one question at a time,
+  filling the board as you answer. Corrections win: *"four hundred euros… no,
+  make it six hundred"* lands as €600.
+
+  The board shows the whole checklist, not just what you've answered, so a
+  topic it skipped is visible rather than silently absent. Two gates, kept
+  separate: Plan unlocks on destination + dates + budget (what the checker
+  needs), while the interviewer keeps going until all eight are covered (what
+  makes the trip yours). "No dietary restrictions" counts as covered — the
+  model reports which topics it has *asked about*, so an answer that fills no
+  field still closes the question.
 
   It runs over WebRTC against OpenAI's Realtime API. The browser never gets the
   API key — the server mints a short-lived client secret from it. Falls back to

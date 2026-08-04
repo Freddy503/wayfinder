@@ -382,9 +382,11 @@
     <div id="ramble-mode" style="display:none">
       <div class="card">
         <h2>Talk it through</h2>
-        <div class="hint" style="margin-bottom:8px">A voice interviewer asks about the
-          trip until it has enough to plan — where, when, budget, then whatever else
-          would change the itinerary. Speak naturally; corrections win.</div>
+        <div class="hint" style="margin-bottom:8px">A voice interviewer works through
+          the checklist below — departure, destination, dates, travellers, budget,
+          tastes, must-dos, dietary — one question at a time, and won't stop until
+          it has been through all eight. Speak naturally; corrections win, and
+          "nothing in particular" is a complete answer.</div>
         <button id="voice" class="primary" style="width:100%">☎ Start conversation</button>
         <div class="hint" id="voice-state" style="margin-top:5px"></div>
         <div id="voice-log" style="margin-top:8px"></div>
@@ -653,28 +655,46 @@ function applyExtracted(fields) {
   if (fields.diet) $("f-diet").value = fields.diet.join("\n");
 }
 
-function renderBoard(fields, missing) {
+function boardRow(mark, label, value, dim) {
+  const row = el("div", "todo");
+  row.append(el("div", "mk", mark));
+  const body = el("div");
+  body.append(el("b", null, label + (value ? ": " : "")));
+  if (value) body.append(document.createTextNode(value));
+  if (dim) row.style.color = "var(--dim)";
+  row.append(body);
+  return row;
+}
+
+/* The board is the answer to "has it asked me everything?", so it shows the
+   whole checklist, not just what's been answered — a topic you can't see is a
+   topic you can't tell it forgot. Three states: answered, asked-and-nothing-to
+   -say, not yet asked. */
+function renderBoard(fields, missing, checklist) {
   const host = $("reqboard"); host.innerHTML = "";
-  const entries = Object.entries(FIELD_LABELS).filter(([k]) => fields[k] !== undefined);
-  if (!entries.length) {
-    host.append(el("div", "empty", "Requirements appear here as you talk."));
+
+  // An empty checklist means the topics fetch failed, not that there is
+  // nothing to ask — fall back to the flat view rather than a blank board.
+  if (checklist && checklist.length) {
+    checklist.forEach(({ label, value, covered }) => {
+      if (value) host.append(boardRow("✓", label, value));
+      else if (covered) host.append(boardRow("✓", label, "none", true));
+      else host.append(boardRow("○", label, "", true));
+    });
+  } else {
+    const entries = Object.entries(FIELD_LABELS).filter(([k]) => fields[k] !== undefined);
+    if (!entries.length) {
+      host.append(el("div", "empty", "Requirements appear here as you talk."));
+    }
+    entries.forEach(([key, [label, fmt]]) =>
+      host.append(boardRow("✓", label, String(fmt(fields[key])))));
+    (missing || []).forEach(name =>
+      host.append(boardRow("○", name + " — still needed", "", true)));
   }
-  entries.forEach(([key, [label, fmt]]) => {
-    const row = el("div", "todo completed");
-    row.classList.remove("completed");           // reuse layout, not strikethrough
-    row.append(el("div", "mk", "✓"));
-    const body = el("div");
-    body.append(el("b", null, label + ": "));
-    body.append(document.createTextNode(fmt(fields[key])));
-    row.append(body);
-    host.append(row);
-  });
-  (missing || []).forEach(name => {
-    const row = el("div", "todo");
-    row.append(el("div", "mk", "○"));
-    row.append(el("div", null, name + " — still needed"));
-    host.append(row);
-  });
+
+  // Only the three essentials gate planning. The rest of the checklist makes
+  // the trip better, not possible — blocking on "dietary" would strand anyone
+  // who happens to eat everything.
   $("ramble-go").disabled = (missing || []).length > 0;
 }
 
@@ -774,43 +794,75 @@ function voiceLog(who, text) {
   while (host.children.length > 8) host.removeChild(host.firstChild);
 }
 
+/* How each topic renders on the board. Values come from what the conversation
+   established — deliberately not from the form, whose Adults/Pace fields ship
+   pre-filled, so reading them back would show "Travellers: 2" for a question
+   nobody has asked yet. */
+const TOPIC_VALUE = {
+  departure: f => f.origin,
+  destination: f => f.destination,
+  dates: f => (f.start && f.end) ? `${f.start} → ${f.end}` : (f.start || f.end),
+  travellers: f => f.adults === undefined ? "" :
+    `${f.adults} adult${f.adults === 1 ? "" : "s"}` + (f.children ? `, ${f.children} children` : ""),
+  budget: f => f.budget === undefined ? "" :
+    `${f.budget} ${f.currency || ""}`.trim() + (f.excludes_flights ? " (excl. flights)" : ""),
+  tastes: f => [(f.prefs || []).join(" · "), f.pace].filter(Boolean).join(" · "),
+  must_do: f => [...(f.must || []), ...(f.avoid || []).map(a => "avoid " + a)].join(" · "),
+  dietary: f => (f.diet || []).join(", "),
+};
+
+let voiceTopics = [], voiceCovered = new Set(), voiceFields = {};
+
+// Show the checklist up front — knowing what it's going to ask about is half
+// the reassurance that it won't stop halfway.
+fetch("/api/realtime/topics").then(r => r.json()).then(data => {
+  voiceTopics = data.topics || [];
+  renderVoiceBoard();
+}).catch(() => { /* board falls back to the dictation view */ });
+
+function resetVoiceIntake() {
+  voiceCovered = new Set(); voiceFields = {};
+  renderVoiceBoard();
+}
+
+function renderVoiceBoard() {
+  const missing = [];
+  if (!voiceFields.destination) missing.push("destination");
+  if (!(voiceFields.start && voiceFields.end)) missing.push("dates");
+  if (voiceFields.budget === undefined) missing.push("budget");
+
+  renderBoard({}, missing, voiceTopics.map(({ id, label }) => ({
+    label,
+    value: String((TOPIC_VALUE[id] || (() => ""))(voiceFields) || ""),
+    covered: voiceCovered.has(id),
+  })));
+
+  const left = voiceTopics.filter(t =>
+    !voiceCovered.has(t.id) && !(TOPIC_VALUE[t.id] || (() => ""))(voiceFields));
+  return { missing, left };
+}
+
 function applyVoiceFields(args) {
-  const { ready, ...fields } = args;
+  const { ready, covered, ...fields } = args;
   // Arrays arrive whole; merge rather than replace so a later mention of one
   // preference doesn't erase the earlier ones.
-  ["prefs", "must", "diet", "meals"].forEach(k => {
+  ["prefs", "must", "diet", "meals", "avoid"].forEach(k => {
     if (!Array.isArray(fields[k])) return;
-    const id = { prefs: "f-prefs", must: "f-must", diet: "f-diet" }[k];
-    if (!id) return;
-    const existing = lines($(id).value);
-    fields[k] = [...new Set([...existing, ...fields[k]])];
+    fields[k] = [...new Set([...(voiceFields[k] || []), ...fields[k]])];
   });
+  Object.assign(voiceFields, fields);
+  (covered || []).forEach(t => voiceCovered.add(t));
+
   applyExtracted(fields);
   if (fields.origin !== undefined) $("f-origin").value = fields.origin;
 
-  const known = specFromForm();
-  const flat = {
-    destination: known.destination, start: known.dates.start,
-    end: known.dates.end, budget: known.budget.total,
-  };
-  const missing = [];
-  if (!flat.destination) missing.push("destination");
-  if (!flat.start || !flat.end) missing.push("dates");
-  if (!flat.budget) missing.push("budget");
-
-  renderBoard(
-    Object.fromEntries(Object.entries({
-      destination: flat.destination, start: flat.start, end: flat.end,
-      adults: known.party.adults, budget: flat.budget, currency: known.budget.currency,
-      pace: known.pace, prefs: known.soft_preferences, must: known.must_do,
-      diet: known.dietary,
-    }).filter(([, v]) => v && (!Array.isArray(v) || v.length))),
-    missing,
-  );
-  $("ramble-go").disabled = missing.length > 0;
-  if (ready && !missing.length) {
-    $("followup").textContent = "✓ Enough to plan — hit Plan trip when you're ready.";
-  }
+  const { missing, left } = renderVoiceBoard();
+  if (missing.length) return;
+  // Enough to plan, but say whether it's still working through the checklist —
+  // otherwise the traveller hangs up mid-interview thinking it's done.
+  $("followup").textContent = ready ? "✓ Got everything — hit Plan trip."
+    : left.length ? `Plannable now. Still asking about: ${left.map(t => t.label.toLowerCase()).join(", ")}.`
+    : "✓ Enough to plan — hit Plan trip when you're ready.";
 }
 
 function wireDataChannel(channel) {
@@ -852,6 +904,7 @@ async function startVoice() {
   } catch (e) {
     $("voice-state").textContent = "could not reach the server: " + e; return;
   }
+  resetVoiceIntake();                      // a new conversation, not a resumed one
   if (!token.ok) {
     $("voice-state").textContent = token.reason +
       " — set OPENAI_API_KEY in .env, or use dictation below.";

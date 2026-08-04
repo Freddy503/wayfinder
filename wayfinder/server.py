@@ -390,6 +390,21 @@ def create_app() -> FastAPI:
 
         return mint_client_secret(date.today().isoformat())
 
+    @app.get("/api/realtime/topics")
+    def realtime_topics() -> dict[str, Any]:
+        """The interview checklist, so the board can show it before you start.
+
+        Split from the token route because that one mints a real credential:
+        rendering a checklist on page load shouldn't cost an unused ephemeral
+        token every time someone opens the page.
+        """
+        from wayfinder.realtime import TOPICS, is_configured
+
+        return {
+            "topics": [{"id": t, "label": label} for t, label, _ in TOPICS],
+            "configured": is_configured(),
+        }
+
     @app.get("/api/examples")
     def examples() -> list[dict[str, Any]]:
         """The eval dataset, reused as one-click starting points."""
