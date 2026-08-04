@@ -35,10 +35,11 @@ EXPERIMENT_MATRIX: dict[str, AgentConfig] = {
     "no-skills": replace(BASELINE, use_skills=False),
     "no-subagents": replace(BASELINE, use_subagents=False),
     "one-researcher": replace(BASELINE, single_researcher=True),
-    "cheap-subagents": replace(BASELINE, subagent_model="anthropic:claude-haiku-4-5"),
-    #: The baseline is Sonnet 5, so the model arm asks the question in the
-    #: other direction: is the stronger model worth roughly double the spend?
-    "opus-throughout": replace(BASELINE, model="anthropic:claude-opus-5"),
+    #: DeepSeek v4 Pro over Flash — same family, more capability, ~3x the price.
+    "deepseek-pro": replace(BASELINE, model="openrouter:deepseek/deepseek-v4-pro"),
+    #: The frontier comparison. Roughly 20x Flash's input price, so the
+    #: question is whether the harness needs it or the checker closes the gap.
+    "sonnet-throughout": replace(BASELINE, model="anthropic:claude-sonnet-5"),
 }
 
 

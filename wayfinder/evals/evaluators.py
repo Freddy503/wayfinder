@@ -25,7 +25,7 @@ from openevals.llm import create_llm_as_judge
 #: Judges run on a cheaper model than the planner. Grading is a much easier task
 #: than planning, and a judge that costs as much as the run makes the eval
 #: matrix too expensive to sweep — which is the thing you actually want to do.
-JUDGE_MODEL = "anthropic:claude-sonnet-5"
+JUDGE_MODEL = "openrouter:deepseek/deepseek-v4-pro"
 
 
 def _metrics(outputs: dict[str, Any]) -> dict[str, float]:
@@ -255,22 +255,27 @@ important missing — a booking that needs making, a warning worth having?
 
 
 def build_judges(model: str = JUDGE_MODEL) -> list[Callable[..., Any]]:
+    """Build the three judges.
+
+    openevals resolves a `model=` string through LangChain's own initialiser,
+    which has no notion of an `openrouter:` prefix. Anything this project's
+    resolver builds into a client is therefore passed as `judge=` instead.
+    """
+    from wayfinder.models import resolve_model
+
+    resolved = resolve_model(model)
+    kwargs: dict[str, Any] = (
+        {"model": model} if isinstance(resolved, str) else {"judge": resolved}
+    )
     return [
         create_llm_as_judge(
-            prompt=TASTE_PROMPT, feedback_key="taste_match", model=model, continuous=True
-        ),
-        create_llm_as_judge(
-            prompt=GROUNDEDNESS_PROMPT,
-            feedback_key="groundedness",
-            model=model,
-            continuous=True,
-        ),
-        create_llm_as_judge(
-            prompt=READABILITY_PROMPT,
-            feedback_key="readability",
-            model=model,
-            continuous=True,
-        ),
+            prompt=prompt, feedback_key=key, continuous=True, **kwargs
+        )
+        for prompt, key in (
+            (TASTE_PROMPT, "taste_match"),
+            (GROUNDEDNESS_PROMPT, "groundedness"),
+            (READABILITY_PROMPT, "readability"),
+        )
     ]
 
 

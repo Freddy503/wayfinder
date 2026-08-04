@@ -35,9 +35,17 @@ uv sync
 cp .env.example .env   # then fill in the keys
 ```
 
-You need `ANTHROPIC_API_KEY` and `TAVILY_API_KEY` to plan, plus
+You need `OPENROUTER_API_KEY` and `TAVILY_API_KEY` to plan, plus
 `LANGSMITH_API_KEY` to run experiments. `WAYFINDER_USER_AGENT` is required by
 Nominatim's usage policy — set it to something that identifies you.
+`OPENAI_API_KEY` unlocks the spoken intake; without it the typed paths still
+work. `ANTHROPIC_API_KEY` is only needed if you pass `--model anthropic:…`.
+
+Models are named `provider:model`. `openrouter:` specs are routed through
+OpenRouter — the default planner is `openrouter:deepseek/deepseek-v4-flash` at
+$0.14/$0.28 per MTok, which is what makes sweeping the experiment matrix
+affordable. Everything else falls through to LangChain's own resolution, so
+`anthropic:claude-sonnet-5` still works unchanged.
 
 ## Use
 
@@ -75,11 +83,20 @@ Three ways to describe a trip, all writing into the same `TripSpec`:
 
 - **Form** — structured fields.
 - **Questions** — a 13-step wizard, client-side and deterministic.
-- **🎙 Ramble** — talk (Web Speech API) or paste a monologue. Every pause
-  re-extracts the *whole* transcript, so corrections win: *"four hundred euros…
-  no, make it six hundred"* lands as €600. A live board shows what's understood
-  and what's still missing, and asks the next question aloud. Plan stays
-  disabled until destination, dates and budget are all in.
+- **🎙 Ramble** — a spoken conversation. Hit *Start conversation* and a voice
+  interviewer asks about the trip until it has enough to plan, one question at
+  a time, filling the board as you answer. Corrections win: *"four hundred
+  euros… no, make it six hundred"* lands as €600. Plan stays disabled until
+  destination, dates and budget are all in.
+
+  It runs over WebRTC against OpenAI's Realtime API. The browser never gets the
+  API key — the server mints a short-lived client secret from it. Falls back to
+  browser dictation (Web Speech API) or a pasted monologue, both of which
+  re-extract the whole transcript on every pause.
+
+  GPT-Live-1 and GPT-Live-1 mini are not in the API yet: they shipped 8 July
+  2026 as the ChatGPT voice experience with a developer waitlist and no
+  announced GA. The model is `REALTIME_MODEL`, so switching is one line.
 
 While it runs you get the **live feed** (every tool call, subagent dispatch and
 constraint check) and a **map that fills in as the agents scout** — each

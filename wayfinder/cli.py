@@ -34,9 +34,12 @@ def _preflight(model: str, *, needs_langsmith: bool = False) -> None:
     """
     import os
 
+    from wayfinder.models import required_key_for
+
     required = []
-    if model.startswith("anthropic:") and not os.environ.get("ANTHROPIC_API_KEY"):
-        required.append("ANTHROPIC_API_KEY")
+    needed = required_key_for(model)
+    if needed and not os.environ.get(needed):
+        required.append(needed)
     if not os.environ.get("TAVILY_API_KEY"):
         required.append("TAVILY_API_KEY")
     if needs_langsmith and not os.environ.get("LANGSMITH_API_KEY"):
@@ -88,7 +91,9 @@ def _print_metrics(report: ConstraintReport) -> None:
 @app.command()
 def plan(
     spec_path: Annotated[Path, typer.Argument(help="Trip spec YAML.")],
-    model: Annotated[str, typer.Option(help="Main agent model.")] = "anthropic:claude-sonnet-5",
+    model: Annotated[
+        str, typer.Option(help="Main agent model, as provider:id.")
+    ] = "openrouter:deepseek/deepseek-v4-flash",
     subagent_model: Annotated[
         str | None, typer.Option(help="Model for subagents. Defaults to --model.")
     ] = None,
@@ -184,7 +189,9 @@ def serve(
     host: Annotated[
         str, typer.Option(help="Bind address. Localhost only unless you know why.")
     ] = "127.0.0.1",
-    model: Annotated[str, typer.Option(help="Default model in the UI.")] = "anthropic:claude-sonnet-5",
+    model: Annotated[
+        str, typer.Option(help="Default model in the UI.")
+    ] = "openrouter:deepseek/deepseek-v4-flash",
 ) -> None:
     """Start the local web UI: live tool calls, approvals, and results.
 

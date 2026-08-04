@@ -376,6 +376,20 @@ def create_app() -> FastAPI:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
+    @app.post("/api/realtime/token")
+    def realtime_token() -> dict[str, Any]:
+        """Mint an ephemeral credential for the browser's voice session.
+
+        The API key stays here. The browser gets a short-lived secret that
+        expires on its own, which is the difference between a leaked token and
+        a leaked account.
+        """
+        from datetime import date
+
+        from wayfinder.realtime import mint_client_secret
+
+        return mint_client_secret(date.today().isoformat())
+
     @app.get("/api/examples")
     def examples() -> list[dict[str, Any]]:
         """The eval dataset, reused as one-click starting points."""

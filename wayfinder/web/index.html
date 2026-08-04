@@ -381,16 +381,25 @@
     <!-- RAMBLE MODE -->
     <div id="ramble-mode" style="display:none">
       <div class="card">
-        <h2>Just talk</h2>
-        <div class="hint" style="margin-bottom:8px">Ramble about the trip — where, when,
-          who's going, what you care about. Corrections win: "€400… actually €600" means €600.
-          No mic? Type or paste instead.</div>
-        <button id="mic" style="width:100%">🎙 Start listening</button>
-        <div class="hint" id="mic-state" style="margin-top:4px"></div>
-        <label>Transcript</label>
-        <textarea id="transcript" rows="7"
-          placeholder="So we're thinking Lisbon in October, four nights, me and my partner…"></textarea>
+        <h2>Talk it through</h2>
+        <div class="hint" style="margin-bottom:8px">A voice interviewer asks about the
+          trip until it has enough to plan — where, when, budget, then whatever else
+          would change the itinerary. Speak naturally; corrections win.</div>
+        <button id="voice" class="primary" style="width:100%">☎ Start conversation</button>
+        <div class="hint" id="voice-state" style="margin-top:5px"></div>
+        <div id="voice-log" style="margin-top:8px"></div>
       </div>
+
+      <details class="opts">
+        <summary>No microphone? Type instead</summary>
+        <div class="card" style="margin-top:10px">
+          <button id="mic" style="width:100%">🎙 Browser dictation</button>
+          <div class="hint" id="mic-state" style="margin-top:4px"></div>
+          <label>Transcript</label>
+          <textarea id="transcript" rows="6"
+            placeholder="So we're thinking Lisbon in October, four nights, me and my partner…"></textarea>
+        </div>
+      </details>
       <div class="card">
         <h2>What I've understood so far</h2>
         <div id="reqboard"><div class="empty">Requirements appear here as you talk.</div></div>
@@ -745,6 +754,160 @@ $("mic").onclick = () => {
 };
 
 $("ramble-go").onclick = () => { if (listening) recognition.stop(); listening = false; start(); };
+
+/* ---------------- speech-to-speech intake ----------------
+   A real conversation rather than dictation: the model listens and speaks at
+   once, asks the next thing it still needs, and writes what it learns into the
+   same hidden form fields the other two modes use. The API key never reaches
+   the browser — the server mints a short-lived credential and we connect with
+   that. */
+let pc = null, dc = null, micStream = null, talking = false;
+
+function voiceLog(who, text) {
+  const host = $("voice-log");
+  const row = el("div", "todo");
+  row.append(el("div", "mk", who === "agent" ? "☎" : "·"));
+  row.append(el("div", null, text));
+  if (who !== "agent") row.style.color = "var(--dim)";
+  host.append(row);
+  host.scrollTop = host.scrollHeight;
+  while (host.children.length > 8) host.removeChild(host.firstChild);
+}
+
+function applyVoiceFields(args) {
+  const { ready, ...fields } = args;
+  // Arrays arrive whole; merge rather than replace so a later mention of one
+  // preference doesn't erase the earlier ones.
+  ["prefs", "must", "diet", "meals"].forEach(k => {
+    if (!Array.isArray(fields[k])) return;
+    const id = { prefs: "f-prefs", must: "f-must", diet: "f-diet" }[k];
+    if (!id) return;
+    const existing = lines($(id).value);
+    fields[k] = [...new Set([...existing, ...fields[k]])];
+  });
+  applyExtracted(fields);
+  if (fields.origin !== undefined) $("f-origin").value = fields.origin;
+
+  const known = specFromForm();
+  const flat = {
+    destination: known.destination, start: known.dates.start,
+    end: known.dates.end, budget: known.budget.total,
+  };
+  const missing = [];
+  if (!flat.destination) missing.push("destination");
+  if (!flat.start || !flat.end) missing.push("dates");
+  if (!flat.budget) missing.push("budget");
+
+  renderBoard(
+    Object.fromEntries(Object.entries({
+      destination: flat.destination, start: flat.start, end: flat.end,
+      adults: known.party.adults, budget: flat.budget, currency: known.budget.currency,
+      pace: known.pace, prefs: known.soft_preferences, must: known.must_do,
+      diet: known.dietary,
+    }).filter(([, v]) => v && (!Array.isArray(v) || v.length))),
+    missing,
+  );
+  $("ramble-go").disabled = missing.length > 0;
+  if (ready && !missing.length) {
+    $("followup").textContent = "✓ Enough to plan — hit Plan trip when you're ready.";
+  }
+}
+
+function wireDataChannel(channel) {
+  channel.addEventListener("message", ev => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+
+    // The model finished asking something — show it so the conversation is
+    // followable without audio.
+    if (msg.type === "response.output_audio_transcript.done" && msg.transcript)
+      voiceLog("agent", msg.transcript);
+    if (msg.type === "conversation.item.input_audio_transcription.completed" && msg.transcript)
+      voiceLog("you", msg.transcript);
+
+    if (msg.type === "response.function_call_arguments.done") {
+      let args = {};
+      try { args = JSON.parse(msg.arguments || "{}"); } catch { /* partial */ }
+      applyVoiceFields(args);
+      // Acknowledge, or the model waits on a result that never arrives.
+      channel.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: msg.call_id,
+                output: JSON.stringify({ ok: true }) },
+      }));
+      channel.send(JSON.stringify({ type: "response.create" }));
+    }
+
+    if (msg.type === "error")
+      $("voice-state").textContent = "error: " + (msg.error?.message || "unknown");
+  });
+}
+
+async function startVoice() {
+  $("voice-state").textContent = "connecting…";
+  let token;
+  try {
+    const res = await fetch("/api/realtime/token", { method: "POST" });
+    token = await res.json();
+  } catch (e) {
+    $("voice-state").textContent = "could not reach the server: " + e; return;
+  }
+  if (!token.ok) {
+    $("voice-state").textContent = token.reason +
+      " — set OPENAI_API_KEY in .env, or use dictation below.";
+    return;
+  }
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    $("voice-state").textContent =
+      "microphone blocked — allow it, or use dictation below.";
+    return;
+  }
+
+  pc = new RTCPeerConnection();
+  const audio = new Audio();
+  audio.autoplay = true;
+  pc.ontrack = ev => { audio.srcObject = ev.streams[0]; };
+  micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+
+  dc = pc.createDataChannel("oai-events");
+  wireDataChannel(dc);
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  const answer = await fetch("https://api.openai.com/v1/realtime/calls", {
+    method: "POST",
+    body: offer.sdp,
+    headers: { Authorization: `Bearer ${token.client_secret}`,
+               "Content-Type": "application/sdp" },
+  });
+  if (!answer.ok) {
+    $("voice-state").textContent = `OpenAI refused the call (${answer.status})`;
+    stopVoice(); return;
+  }
+  await pc.setRemoteDescription({ type: "answer", sdp: await answer.text() });
+
+  talking = true;
+  $("voice").textContent = "⏹ End conversation";
+  $("voice").classList.remove("primary");
+  $("voice-state").textContent = `listening · ${token.model}`;
+}
+
+function stopVoice() {
+  talking = false;
+  dc?.close(); pc?.close();
+  micStream?.getTracks().forEach(t => t.stop());
+  dc = pc = micStream = null;
+  $("voice").textContent = "☎ Start conversation";
+  $("voice").classList.add("primary");
+  if (!$("voice-state").textContent.startsWith("error"))
+    $("voice-state").textContent = "";
+}
+
+$("voice").onclick = () => (talking ? stopVoice() : startVoice());
 
 /* ---------------- feed ---------------- */
 function feedAdd(node) {

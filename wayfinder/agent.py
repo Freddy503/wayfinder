@@ -19,6 +19,7 @@ import yaml
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 
+from wayfinder.models import resolve_model
 from wayfinder.prompts import MAIN_PROMPT
 from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import Itinerary, TripSpec
@@ -54,8 +55,8 @@ class AgentConfig:
     rather than a guess made up front.
     """
 
-    #: A model id, or a chat model instance (the tests pass a fake one).
-    model: Any = "anthropic:claude-sonnet-5"
+    #: A model spec (`provider:id`) or a chat model instance.
+    model: Any = "openrouter:deepseek/deepseek-v4-flash"
     #: Subagents inherit `model` unless this is set. Sweeping it answers "does
     #: the cheap model do the research just as well?"
     subagent_model: str | None = None
@@ -74,8 +75,9 @@ class AgentConfig:
     recursion_limit: int = 250
 
     def label(self) -> str:
-        name = self.model if isinstance(self.model, str) else type(self.model).__name__
-        bits = [name.split(":")[-1]]
+        from wayfinder.models import label_of
+
+        bits = [label_of(self.model)]
         if not self.use_repair_loop:
             bits.append("no-repair")
         if not self.use_skills:
@@ -85,7 +87,9 @@ class AgentConfig:
         elif self.single_researcher:
             bits.append("one-researcher")
         if isinstance(self.subagent_model, str):
-            bits.append(f"sub={self.subagent_model.split(':')[-1]}")
+            from wayfinder.models import label_of
+
+            bits.append(f"sub={label_of(self.subagent_model)}")
         return "+".join(bits)
 
 
@@ -273,7 +277,7 @@ def build_agent(
 
         subagents = build_subagents(
             tools=research_tools,
-            model=config.subagent_model or config.model,
+            model=resolve_model(config.subagent_model or config.model),
             single_researcher=config.single_researcher,
         )
 
@@ -285,7 +289,7 @@ def build_agent(
     }
 
     return create_deep_agent(
-        model=config.model,
+        model=resolve_model(config.model),
         system_prompt=MAIN_PROMPT,
         tools=tools,
         subagents=subagents or None,
