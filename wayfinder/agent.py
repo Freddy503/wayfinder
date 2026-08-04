@@ -19,6 +19,7 @@ import yaml
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 
+from wayfinder.adjust import LiveSpec, summarise_constraints
 from wayfinder.models import DEFAULT_MODEL, resolve_model
 from wayfinder.prompts import MAIN_PROMPT
 from wayfinder.render import render_markdown, render_sources
@@ -72,6 +73,10 @@ class AgentConfig:
     use_finalize: bool = False
     #: Tool names that pause for human approval. Needs a checkpointer.
     interrupt_on: tuple[str, ...] = ()
+    #: Lets the agent ask the traveller to relax a blocking constraint rather
+    #: than declaring the trip impossible. Interactive only — in the eval matrix
+    #: nobody is there to answer, and "correctly refused" is the metric.
+    allow_change_requests: bool = False
     recursion_limit: int = 250
 
     def label(self) -> str:
@@ -121,13 +126,19 @@ class RunResult:
         return counts
 
 
-def make_check_tool(spec: TripSpec, run_dir: Path, counter: dict[str, int]):
+def make_check_tool(spec: TripSpec | LiveSpec, run_dir: Path, counter: dict[str, int]):
     """Build the `check_itinerary` tool, bound to this run's spec and directory.
 
     The same `check_payload` the evaluators call — so the agent is optimising
     against the exact function that will later grade it, not an approximation
     of it.
+
+    Takes a `LiveSpec` when the traveller can change their mind mid-run. Reading
+    the spec afresh on every call is what makes that work: a budget raised while
+    the agent was mid-search is in force at the very next check, with no
+    interrupt and no restart. A plain `TripSpec` still works and never changes.
     """
+    live = spec if isinstance(spec, LiveSpec) else None
 
     def check_itinerary(path: str = ITINERARY_FILE) -> dict:
         """Check the itinerary you have written against the trip's constraints.
@@ -144,32 +155,108 @@ def make_check_tool(spec: TripSpec, run_dir: Path, counter: dict[str, int]):
             `{"passed", "summary", "violations", "metrics"}`.
         """
         counter["calls"] += 1
+        current = live.current if live else spec
+        # Read-once, so the agent is told about a change exactly when it
+        # happens and doesn't keep re-planning around one it already handled.
+        news = live.take_news() if live else []
+
+        def answer(**fields: Any) -> dict:
+            if news:
+                fields["traveller_changed"] = news
+                fields["summary"] = (
+                    f"The traveller changed: {'; '.join(news)}. "
+                    f"These are in force now — re-plan against them. "
+                    + str(fields.get("summary", ""))
+                ).strip()
+            return fields
+
         target = run_dir / path.lstrip("/")
         if not target.exists():
-            return {
-                "passed": False,
-                "summary": f"{path} does not exist yet — write it first.",
-                "violations": [],
-                "metrics": {},
-            }
+            return answer(
+                passed=False,
+                summary=f"{path} does not exist yet — write it first.",
+                violations=[],
+                metrics={},
+            )
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            return {
-                "passed": False,
-                "summary": f"{path} is not valid JSON: {exc}",
-                "violations": [],
-                "metrics": {"schema_valid": 0.0},
-            }
-        report = check_payload(spec, payload)
-        return {
-            "passed": report.passed,
-            "summary": report.summary(),
-            "violations": [v.to_dict() for v in report.violations],
-            "metrics": report.metrics,
-        }
+            return answer(
+                passed=False,
+                summary=f"{path} is not valid JSON: {exc}",
+                violations=[],
+                metrics={"schema_valid": 0.0},
+            )
+        report = check_payload(current, payload)
+        return answer(
+            passed=report.passed,
+            summary=report.summary(),
+            violations=[v.to_dict() for v in report.violations],
+            metrics=report.metrics,
+        )
 
     return check_itinerary
+
+
+def make_request_change_tool(live: LiveSpec):
+    """Build `request_change` — the agent's way of asking instead of giving up.
+
+    Without it, an over-tight constraint is terminal: the agent writes
+    `feasible: false`, explains the shortfall, and the run is over. That is the
+    right answer to "is this spec satisfiable" and the wrong answer to "help me
+    plan this trip" — a budget €140 short doesn't mean don't go, and only the
+    traveller can say whether to spend more or skip the boat trip.
+
+    It's an interrupt, so the graph parks on a checkpoint and resumes on the
+    same thread once answered. Nothing is recomputed; the research already done
+    stays done.
+    """
+
+    def request_change(
+        constraint: str, problem: str, suggestion: str, shortfall: str = ""
+    ) -> dict:
+        """Ask the traveller to relax a constraint you cannot satisfy.
+
+        Use this instead of declaring the trip infeasible, whenever a *single*
+        constraint is the thing standing in the way and a human could plausibly
+        change it. Reach for it once you have evidence — real prices, real
+        travel times — not on a hunch, and not before you've genuinely tried to
+        plan within the spec.
+
+        Do not use it to ask open questions, and do not use it for the
+        destination or the dates: those make it a different trip, not an
+        adjusted one.
+
+        Args:
+            constraint: Which one is blocking you. One of: budget, pace,
+                must_do, max_transit_minutes, min_free_block_minutes,
+                earliest_start, latest_end, required_meals,
+                max_walk_km_per_day.
+            problem: What you found, in one sentence, with the numbers. "Three
+                nights of accommodation plus the museums you asked for comes to
+                €1,040 against a €900 budget."
+            suggestion: The smallest change that would work, and the honest
+                alternative. "Raising the budget to €1,050 covers it, or
+                dropping the Gulbenkian saves €90."
+            shortfall: The gap as a bare number or duration, if there is one.
+
+        Returns:
+            `{"changed": bool, "notes": [...], "answer": str}` — what the
+            traveller decided. If `changed` is true the new constraint is
+            already in force; re-plan against it and carry on.
+        """
+        return {
+            "changed": False,
+            "notes": [],
+            "answer": "no response recorded",
+            "constraint": constraint,
+            "problem": problem,
+            "suggestion": suggestion,
+            "shortfall": shortfall,
+            "current": summarise_constraints(live.current),
+        }
+
+    return request_change
 
 
 def make_finalize_tool(spec: TripSpec, run_dir: Path):
@@ -242,7 +329,7 @@ def stage_skills(run_dir: Path) -> None:
 
 
 def build_agent(
-    spec: TripSpec,
+    spec: TripSpec | LiveSpec,
     run_dir: Path,
     config: AgentConfig,
     counter: dict[str, int],
@@ -253,7 +340,15 @@ def build_agent(
     `checkpointer` is what makes human-in-the-loop possible: an interrupt has
     to persist the graph mid-run so it can be resumed after a human answers.
     The CLI leaves it unset and runs straight through; the server passes one in.
+
+    Pass a `LiveSpec` to let the traveller change constraints while it runs.
+    `request_change` only appears when there's a live spec and a checkpointer to
+    park on — offering the agent a way to ask, in a run where nobody can answer,
+    would hang it.
     """
+    live = spec if isinstance(spec, LiveSpec) else None
+    fixed = live.current if live else spec
+
     research_tools = [
         web_search,
         geocode,
@@ -265,8 +360,10 @@ def build_agent(
     tools = list(research_tools)
     if config.use_repair_loop:
         tools.append(make_check_tool(spec, run_dir, counter))
+    if live is not None and checkpointer is not None and config.allow_change_requests:
+        tools.append(make_request_change_tool(live))
     if config.use_finalize:
-        tools.append(make_finalize_tool(spec, run_dir))
+        tools.append(make_finalize_tool(fixed, run_dir))
 
     if config.use_skills:
         stage_skills(run_dir)
@@ -287,6 +384,10 @@ def build_agent(
     interrupt_on = {
         name: True for name in config.interrupt_on if name in available or name == "task"
     }
+    # `request_change` is a question for a human; letting it return without one
+    # would have the agent read its own placeholder as the answer.
+    if "request_change" in available:
+        interrupt_on["request_change"] = True
 
     return create_deep_agent(
         model=resolve_model(config.model),

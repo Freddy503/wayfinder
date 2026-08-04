@@ -46,6 +46,7 @@ from wayfinder.agent import (
     new_run_dir,
     user_message,
 )
+from wayfinder.adjust import AdjustmentError, LiveSpec, summarise_constraints
 from wayfinder.evals.datasets import load_cases
 from wayfinder.schema import TripSpec
 from wayfinder.stream import Event, StreamTranslator
@@ -69,6 +70,9 @@ class PlanRequest(BaseModel):
     repair: bool = True
     single_researcher: bool = False
     interrupt_on: list[str] = Field(default_factory=lambda: ["finalize_itinerary"])
+    #: Lets the agent ask to relax a blocking constraint instead of returning
+    #: "impossible". On by default in the browser, where someone is watching.
+    allow_change_requests: bool = True
 
 
 class ExtractRequest(BaseModel):
@@ -87,12 +91,27 @@ class DecisionRequest(BaseModel):
     decisions: list[Decision]
 
 
+class AdjustRequest(BaseModel):
+    """A constraint change, from the traveller, at any point in the run."""
+
+    changes: dict[str, Any]
+    #: Set when answering the agent's own `request_change`. Applies the change
+    #: *and* resumes the parked graph in one step, so the traveller sees one
+    #: action rather than "save, then also click continue".
+    resume: bool = False
+    #: What to tell the agent when declining. Only read if `changes` is empty.
+    message: str | None = None
+
+
 class RunSession:
     """One planning run: a worker thread, an event queue, and a resume latch."""
 
     def __init__(self, request: PlanRequest) -> None:
         self.id = uuid.uuid4().hex[:12]
-        self.spec = TripSpec.model_validate(request.spec)
+        # The spec is live: the traveller can change a constraint at any point
+        # and the checker — and so the final verdict — grade against what was
+        # agreed, not what was typed before anyone knew the prices.
+        self.live = LiveSpec(spec=TripSpec.model_validate(request.spec))
         self.config = AgentConfig(
             model=request.model,
             use_subagents=request.subagents,
@@ -101,12 +120,15 @@ class RunSession:
             single_researcher=request.single_researcher,
             use_finalize=bool(request.interrupt_on),
             interrupt_on=tuple(request.interrupt_on),
+            allow_change_requests=request.allow_change_requests,
         )
-        self.run_dir = new_run_dir(self.spec)
+        self.run_dir = new_run_dir(self.live.current)
         self.queue: queue.Queue[Event | None] = queue.Queue()
         self.status = "starting"
         self.result: dict[str, Any] | None = None
         self.pending: list[dict[str, Any]] = []
+        #: Set while the agent is parked on its own `request_change`.
+        self.asking: dict[str, Any] | None = None
 
         self._decision: Any = None
         self._decision_ready = threading.Event()
@@ -125,7 +147,61 @@ class RunSession:
             raise HTTPException(status_code=409, detail=msg)
         self._decision = {"decisions": [_to_langgraph(d) for d in decisions]}
         self.pending = []
+        self.asking = None
         self._decision_ready.set()
+
+    def adjust(self, request: AdjustRequest) -> dict[str, Any]:
+        """Change a constraint mid-run.
+
+        Two situations, one method. If the graph is parked on the agent's own
+        `request_change`, this applies the change and resumes it with the
+        answer. If the run is simply going, the change lands immediately and
+        the agent learns about it at its next `check_itinerary` — no interrupt,
+        nothing thrown away, which is the whole point.
+        """
+        try:
+            notes = self.live.apply(request.changes) if request.changes else []
+        except AdjustmentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if notes:
+            # Keep the run directory honest: it should describe the trip that
+            # was actually planned, not the one first asked for.
+            (self.run_dir / "spec.yaml").write_text(
+                yaml.safe_dump(
+                    self.live.current.model_dump(mode="json"),
+                    sort_keys=False,
+                    allow_unicode=True,
+                ),
+                encoding="utf-8",
+            )
+            self._emit(
+                Event(
+                    "constraints.changed",
+                    {
+                        "notes": notes,
+                        "constraints": summarise_constraints(self.live.current),
+                        "answered_agent": request.resume and self.status == "waiting",
+                    },
+                )
+            )
+
+        if request.resume:
+            if self.status != "waiting":
+                msg = f"run is {self.status}, not waiting for an answer"
+                raise HTTPException(status_code=409, detail=msg)
+            answer = (
+                f"Changed: {'; '.join(notes)}. Re-plan against this and continue."
+                if notes
+                else (request.message or "Leave that constraint as it is.")
+            )
+            self.decide([Decision(type="respond", message=answer)])
+
+        return {
+            "ok": True,
+            "notes": notes,
+            "constraints": summarise_constraints(self.live.current),
+        }
 
     def events(self):
         """Drain the queue as SSE frames until the run ends."""
@@ -149,7 +225,9 @@ class RunSession:
             # a run directory should be self-describing regardless of entry point.
             (self.run_dir / "spec.yaml").write_text(
                 yaml.safe_dump(
-                    self.spec.model_dump(mode="json"), sort_keys=False, allow_unicode=True
+                    self.live.current.model_dump(mode="json"),
+                    sort_keys=False,
+                    allow_unicode=True,
                 ),
                 encoding="utf-8",
             )
@@ -157,7 +235,7 @@ class RunSession:
                 json.dumps(asdict(self.config), indent=2, default=str), encoding="utf-8"
             )
             agent = build_agent(
-                self.spec,
+                self.live,
                 self.run_dir,
                 self.config,
                 self._counter,
@@ -166,7 +244,7 @@ class RunSession:
             graph_config = {
                 "configurable": {"thread_id": self.id},
                 "recursion_limit": self.config.recursion_limit,
-                "run_name": f"wayfinder-web:{self.spec.slug}",
+                "run_name": f"wayfinder-web:{self.live.current.slug}",
                 "metadata": {"wayfinder_config": self.config.label(), "run_id": self.id},
             }
 
@@ -177,14 +255,14 @@ class RunSession:
                     {
                         "run_id": self.id,
                         "run_dir": str(self.run_dir),
-                        "destination": self.spec.destination,
+                        "destination": self.live.current.destination,
                         "config": self.config.label(),
                         "interrupt_on": list(self.config.interrupt_on),
                     },
                 )
             )
 
-            payload: Any = {"messages": [{"role": "user", "content": user_message(self.spec)}]}
+            payload: Any = {"messages": [{"role": "user", "content": user_message(self.live.current)}]}
 
             while True:
                 for chunk in agent.stream(
@@ -196,6 +274,12 @@ class RunSession:
                     for event in translator.translate(chunk):
                         if event.type == "interrupt":
                             self.pending = event.data.get("actions", [])
+                        elif event.type == "change.requested":
+                            # A question about the trip, not a tool to approve —
+                            # so there is nothing pending to render as an
+                            # approval card, and a stale one would be worse.
+                            self.pending = []
+                            self.asking = dict(event.data)
                         self._emit(event)
 
                 # The stream ending means either the run finished or it is
@@ -205,7 +289,16 @@ class RunSession:
                     break
 
                 self.status = "waiting"
-                self._emit(Event("run.waiting", {"actions": self.pending}))
+                self._emit(
+                    Event(
+                        "run.waiting",
+                        {
+                            "actions": self.pending,
+                            "asking": self.asking,
+                            "constraints": summarise_constraints(self.live.current),
+                        },
+                    )
+                )
                 self._decision_ready.wait()
                 self._decision_ready.clear()
                 self.status = "running"
@@ -220,7 +313,7 @@ class RunSession:
         # browser always ends with a verdict rather than an empty panel.
         try:
             result = finalise(
-                self.spec,
+                self.live.current,
                 self.config,
                 self.run_dir,
                 check_calls=self._counter["calls"],
@@ -295,6 +388,29 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="no such run")
         session.decide(request.decisions)
         return {"status": "resumed"}
+
+    @app.post("/api/adjust/{run_id}")
+    def adjust(run_id: str, request: AdjustRequest) -> dict[str, Any]:
+        """Change a constraint on a run that is already going.
+
+        The point of the whole feature: a budget that turns out to be €140
+        short shouldn't end the run, and fixing it shouldn't throw away the
+        research already done.
+        """
+        session = runs.get(run_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return session.adjust(request)
+
+    @app.get("/api/constraints/{run_id}")
+    def constraints(run_id: str) -> dict[str, Any]:
+        session = runs.get(run_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return {
+            "constraints": summarise_constraints(session.live.current),
+            "history": session.live.history,
+        }
 
     @app.get("/api/runs/{run_id}")
     def run_status(run_id: str) -> dict[str, Any]:

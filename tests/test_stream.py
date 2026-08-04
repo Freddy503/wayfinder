@@ -379,3 +379,157 @@ def test_artifact_name_cannot_escape_the_run_directory(client):
     for evil in ["../../etc/passwd", "..%2F..%2Fspec.yaml", "/etc/passwd", "../config.json"]:
         response = client.get(f"/api/runs/{run_id}/artifact/{evil}")
         assert response.status_code == 404, f"{evil!r} was served"
+
+
+# --------------------------------------------------------------------------
+# What the traveller reads
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "args", "expected"),
+    [
+        ("web_search", {"query": "Ramiro opening hours"}, "Looking up Ramiro opening hours"),
+        ("geocode", {"place": "Alfama"}, "Finding Alfama"),
+        ("venue_rating", {"venue": "Ramiro", "city": "Lisbon"},
+         "Checking reviews for Ramiro (Lisbon)"),
+        ("check_itinerary", {"path": "itinerary.json"}, "Checking the plan"),
+        ("flight_search", {"origin": "BER"}, "Searching flights"),
+    ],
+)
+def test_narration_reads_as_someone_doing_the_research(name, args, expected):
+    """`geocode → Praça do Comércio` tells you the harness works and nothing
+    about your trip."""
+    from wayfinder.stream import narrate
+
+    assert narrate(name, args) == expected
+
+
+def test_an_unknown_tool_keeps_its_own_name():
+    """Inventing a phrase for something unrecognised is worse than a bare name
+    — it would confidently describe the wrong thing."""
+    from wayfinder.stream import narrate
+
+    assert narrate("some_new_tool", {"a": 1}).startswith("some_new_tool")
+
+
+def test_tool_calls_carry_both_a_summary_and_a_narration():
+    t = StreamTranslator()
+    events = t.translate(
+        updates("model", {"messages": [ai([call("geocode", {"place": "Belém"})])]})
+    )
+    assert events[0].data["summary"] == "Belém"
+    assert events[0].data["narration"] == "Finding Belém"
+
+
+def test_subagents_are_named_by_their_job():
+    t = StreamTranslator()
+    events = t.translate(
+        updates(
+            "model",
+            {"messages": [ai([call("task", {"subagent_type": "food", "description": "eat"})])]},
+        )
+    )
+    assert events[0].data["role"] == "Places to eat"
+    assert events[0].data["icon"]
+
+
+def test_an_unknown_subagent_gets_a_readable_label():
+    from wayfinder.stream import describe_role
+
+    assert describe_role("night_life")[0] == "Night Life"
+
+
+REPORT = """
+## Seafood
+- **Cervejaria Ramiro** — no reservations, expect a 40 minute queue
+- Sea Me: Chiado, pricier, good for a sit-down dinner
+
+## Warnings
+- Most museums close on Mondays.
+"""
+
+
+def test_a_research_report_yields_findings_the_ui_can_lay_out():
+    t = StreamTranslator()
+    t.translate(
+        updates("model", {"messages": [ai([call("task", {"subagent_type": "food"})])]})
+    )
+    events = t.translate(
+        updates("model", {"messages": [ToolMessage(content=REPORT, tool_call_id="c1")]})
+    )
+    findings = events[0].data["findings"]
+    assert {f["name"] for f in findings} == {
+        "Cervejaria Ramiro", "Sea Me", "Most museums close on Mondays.",
+    }
+    assert findings[0]["detail"] == "no reservations, expect a 40 minute queue"
+    assert findings[0]["section"] == "Seafood"
+    assert events[0].data["role"] == "Places to eat"
+
+
+def test_the_full_report_survives_alongside_the_findings():
+    """Extraction is best-effort; a subagent that writes in paragraphs must
+    degrade to the old behaviour, not to a blank panel."""
+    t = StreamTranslator()
+    t.translate(updates("model", {"messages": [ai([call("task", {"subagent_type": "scout"})])]}))
+    prose = "Alfama is worth a morning. " * 20
+    events = t.translate(
+        updates("model", {"messages": [ToolMessage(content=prose, tool_call_id="c1")]})
+    )
+    assert events[0].data["findings"] == []
+    assert events[0].data["report"].startswith("Alfama is worth a morning.")
+
+
+def test_reports_are_not_truncated_to_a_glance():
+    """They are the only place in a run that says what was *found*."""
+    from wayfinder.stream import PREVIEW_CHARS, REPORT_CHARS
+
+    assert REPORT_CHARS > PREVIEW_CHARS * 5
+
+
+# --------------------------------------------------------------------------
+# The agent asking for room
+# --------------------------------------------------------------------------
+
+
+def ask_interrupt(**args):
+    return (
+        (),
+        "updates",
+        {"__interrupt__": [{"value": {"action_requests": [
+            {"name": "request_change", "args": args}
+        ]}}]},
+    )
+
+
+def test_a_change_request_is_a_question_not_an_approval_card():
+    """It must never render as a tool-approval blob — the traveller is being
+    asked about their budget, not asked to authorise a function call."""
+    t = StreamTranslator()
+    events = t.translate(
+        ask_interrupt(
+            constraint="budget",
+            problem="Four nights plus the museums comes to €1,040 against €900.",
+            suggestion="€1,050 covers it, or drop the Gulbenkian to save €90.",
+            shortfall="140 EUR",
+        )
+    )
+    assert [e.type for e in events] == ["change.requested"]
+    assert events[0].data["constraint"] == "budget"
+    assert "€1,040" in events[0].data["problem"]
+
+
+def test_a_change_request_alongside_a_real_approval_yields_both():
+    t = StreamTranslator()
+    events = t.translate(
+        (
+            (),
+            "updates",
+            {"__interrupt__": [{"value": {"action_requests": [
+                {"name": "request_change", "args": {"constraint": "budget"}},
+                {"name": "finalize_itinerary", "args": {"summary": "done"}},
+            ]}}]},
+        )
+    )
+    assert [e.type for e in events] == ["change.requested", "interrupt"]
+    assert [a["name"] for a in events[1].data["actions"]] == ["finalize_itinerary"]

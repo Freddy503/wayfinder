@@ -27,6 +27,11 @@ CHECK_TOOLS = {"check_itinerary", "finalize_itinerary"}
 #: return whole documents; the feed wants a glance, not the transcript.
 PREVIEW_CHARS = 600
 
+#: Subagent reports get far more room. They are the only place in the run where
+#: something says what it *found* — restaurants, opening hours, a warning about
+#: Mondays — rather than what it did.
+REPORT_CHARS = 6000
+
 
 @dataclass
 class Event:
@@ -164,13 +169,17 @@ class StreamTranslator:
             self._calls[call_id] = {"name": name, "args": args, "agent": agent}
 
             if name == "task":
+                role = args.get("subagent_type") or args.get("name") or "?"
+                label, icon = describe_role(role)
                 events.append(
                     Event(
                         "subagent.start",
                         {
                             "id": call_id,
                             "agent": agent,
-                            "subagent": args.get("subagent_type") or args.get("name") or "?",
+                            "subagent": role,
+                            "role": label,
+                            "icon": icon,
                             "task": _preview(
                                 args.get("description") or args.get("task") or "", 300
                             ),
@@ -187,6 +196,9 @@ class StreamTranslator:
                             "name": name,
                             "args": args,
                             "summary": _summarise_call(name, args),
+                            # What the traveller reads. `summary` stays as-is
+                            # for the developer feed and the approval card.
+                            "narration": narrate(name, args),
                         },
                     )
                 )
@@ -200,9 +212,28 @@ class StreamTranslator:
         ok = status != "error"
 
         if name == "task":
+            role = (
+                origin.get("args", {}).get("subagent_type")
+                or origin.get("args", {}).get("name")
+                or "?"
+            )
+            label, icon = describe_role(role)
             return Event(
                 "subagent.end",
-                {"id": call_id, "agent": agent, "report": _preview(content, 1200), "ok": ok},
+                {
+                    "id": call_id,
+                    "agent": agent,
+                    "subagent": role,
+                    "role": label,
+                    "icon": icon,
+                    # Longer than a glance: this is the one place a research
+                    # subagent says what it actually found, and truncating it
+                    # to a preview was throwing away the only interesting text
+                    # in the run.
+                    "report": _preview(content, REPORT_CHARS),
+                    "findings": _findings(content),
+                    "ok": ok,
+                },
             )
 
         if name in CHECK_TOOLS:
@@ -292,6 +323,28 @@ class StreamTranslator:
             configs = {
                 c.get("action_name"): c for c in value.get("review_configs", []) or [] if c
             }
+
+            # A change request is a question about the trip, not a tool awaiting
+            # approval. It gets its own event so the UI can ask it in the
+            # traveller's language instead of rendering an args blob.
+            asks = [r for r in requests if r.get("name") == "request_change"]
+            for ask in asks:
+                args = ask.get("args", {}) or {}
+                events.append(
+                    Event(
+                        "change.requested",
+                        {
+                            "constraint": args.get("constraint", ""),
+                            "problem": args.get("problem", ""),
+                            "suggestion": args.get("suggestion", ""),
+                            "shortfall": args.get("shortfall", ""),
+                        },
+                    )
+                )
+            requests = [r for r in requests if r.get("name") != "request_change"]
+            if not requests:
+                continue
+
             events.append(
                 Event(
                     "interrupt",
@@ -315,6 +368,66 @@ class StreamTranslator:
                 )
             )
         return events
+
+
+#: A bullet worth showing: long enough to say something, short enough to read
+#: at a glance while the run is going.
+_MIN_FINDING, _MAX_FINDING = 12, 240
+_MAX_FINDINGS = 12
+
+
+def _findings(content: Any) -> list[dict[str, str]]:
+    """Pull the named things out of a subagent's report.
+
+    Research subagents write markdown — headings, bullets, the occasional
+    table. The traveller wants *"Cervejaria Ramiro — seafood, no reservations,
+    expect a queue"*, not four hundred words of prose with that sentence
+    somewhere inside it. So: take the bullets, split each into a name and the
+    rest, and let the UI lay them out as cards.
+
+    Best-effort by design. A report that doesn't use bullets yields nothing
+    here and the full text is still shown underneath, so a subagent that writes
+    in paragraphs degrades to what we had before rather than to a blank panel.
+    """
+    text = content if isinstance(content, str) else _preview(content, REPORT_CHARS)
+    findings: list[dict[str, str]] = []
+    section = ""
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            section = line.lstrip("#").strip()
+            continue
+        if not (line.startswith(("- ", "* ", "+ ")) or _numbered(line)):
+            continue
+
+        body = line.lstrip("-*+ ").strip()
+        body = body.split(". ", 1)[1] if _numbered(line) and ". " in body else body
+        if not _MIN_FINDING <= len(body) <= _MAX_FINDING:
+            continue
+
+        # "**Name** — detail", "Name: detail", "Name — detail" all show up
+        # depending on the model's mood. Split on whichever comes first.
+        name, detail = body, ""
+        stripped = body.replace("**", "")
+        for sep in (" — ", " – ", ": ", " - "):
+            if sep in stripped:
+                name, detail = stripped.split(sep, 1)
+                break
+
+        findings.append(
+            {"name": name.strip(" *_"), "detail": detail.strip(), "section": section}
+        )
+        if len(findings) >= _MAX_FINDINGS:
+            break
+    return findings
+
+
+def _numbered(line: str) -> bool:
+    head = line.split(".", 1)[0]
+    return head.isdigit() and len(head) <= 2 and "." in line
 
 
 def _as_dict(content: Any) -> dict | None:
@@ -355,3 +468,51 @@ def _summarise_call(name: str, args: dict[str, Any]) -> str:
     if name in CHECK_TOOLS:
         return str(args.get("path", "itinerary.json"))
     return _preview(args, 200)
+
+
+#: What each tool is *doing*, in the traveller's terms. The feed used to read
+#: `geocode → Praça do Comércio`, which tells you the harness is working and
+#: nothing about your trip. This reads as someone narrating their research.
+_NARRATION: dict[str, str] = {
+    "web_search": "Looking up",
+    "geocode": "Finding",
+    "venue_rating": "Checking reviews for",
+    "estimate_travel": "Timing the trip from",
+    "fx_convert": "Converting",
+    "flight_search": "Searching flights",
+    "check_itinerary": "Checking the plan",
+    "finalize_itinerary": "Finishing up",
+    "write_file": "Writing",
+    "read_file": "Re-reading",
+    "edit_file": "Revising",
+    "write_todos": "Planning the work",
+}
+
+#: Subagent names as a traveller would describe the job.
+_ROLES: dict[str, tuple[str, str]] = {
+    "scout": ("Neighbourhoods & sights", "🗺"),
+    "food": ("Places to eat", "🍽"),
+    "logistics": ("Getting around", "🚊"),
+    "researcher": ("Research", "🔍"),
+    "critic": ("Second opinion", "🧐"),
+}
+
+
+def narrate(name: str, args: dict[str, Any]) -> str:
+    """One human sentence for a tool call.
+
+    Falls back to the tool's own name rather than inventing a phrase for
+    something unrecognised — a wrong description is worse than a bare one.
+    """
+    detail = _summarise_call(name, args)
+    verb = _NARRATION.get(name)
+    if verb is None:
+        return f"{name}{f' — {detail}' if detail else ''}"
+    if name in {"check_itinerary", "finalize_itinerary", "write_todos", "flight_search"}:
+        return verb
+    return f"{verb} {detail}".strip() if detail else verb
+
+
+def describe_role(subagent: str) -> tuple[str, str]:
+    """Label and icon for a subagent, defaulting to its own name."""
+    return _ROLES.get(subagent, (subagent.replace("_", " ").title(), "•"))
