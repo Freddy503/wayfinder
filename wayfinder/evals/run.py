@@ -27,6 +27,12 @@ from wayfinder.schema import TripSpec
 
 BASELINE = AgentConfig()
 
+#: Tools that cost a network round trip per call, batch or not.
+VERIFY_TOOLS = frozenset({
+    "geocode", "venue_rating", "estimate_travel",
+    "geocode_all", "venue_ratings", "estimate_travel_all",
+})
+
 #: Each arm turns off exactly one thing. Read a column of results as "what did
 #: this component buy us?" — which is only a fair question if nothing else moved.
 EXPERIMENT_MATRIX: dict[str, AgentConfig] = {
@@ -70,9 +76,12 @@ def make_target(config: AgentConfig, runs_root: Path | None = None):
             # on quality — which saturates at 1.0 on anything easy.
             "tool_calls": sum(tool_calls.values()),
             "tool_breakdown": tool_calls,
+            # Turns spent verifying, not items verified. The batch tools were
+            # added precisely to collapse thirty of these into one, so counting
+            # a batch as a single call is the point — the metric measures the
+            # thing that costs wall-clock.
             "verification_calls": sum(
-                n for t, n in tool_calls.items()
-                if t in ("geocode", "venue_rating", "estimate_travel")
+                n for t, n in tool_calls.items() if t in VERIFY_TOOLS
             ),
             "error": result.error,
             "run_dir": str(result.run_dir),

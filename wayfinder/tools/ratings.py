@@ -91,3 +91,46 @@ def venue_rating(venue: str, city: str) -> dict:
             "snippet": blob[:220],
         }
     return {"found": False, "query": query}
+
+
+#: Same reasoning as the geo batches: one turn per venue is the expensive part,
+#: not the lookup. See `wayfinder/tools/geo.py` for the measurements.
+MAX_BATCH = 40
+
+
+def venue_ratings(venues: list[dict], city: str = "") -> dict:
+    """Look up review ratings for several venues at once.
+
+    Prefer this over calling `venue_rating` repeatedly — do your whole
+    shortlist in one call.
+
+    Args:
+        venues: `[{"venue": ..., "city": ...}, ...]`, or plain names as strings
+            if they're all in the same `city`. Up to 40.
+        city: Default city for entries that don't name one.
+
+    Returns:
+        `{"results": [...], "found": n}` — one entry per venue, in order, each
+        shaped like `venue_rating`'s return plus the `venue` it was for.
+        Venues with `found: false` should be left without a `rating` rather
+        than guessed at.
+    """
+    if not isinstance(venues, list):
+        venues = [venues]
+    if len(venues) > MAX_BATCH:
+        return {
+            "error": f"{len(venues)} venues is more than the {MAX_BATCH} limit — "
+            "rate your shortlist, not every candidate.",
+            "results": [],
+        }
+
+    results = []
+    for entry in venues:
+        name = entry.get("venue", "") if isinstance(entry, dict) else str(entry)
+        where = (entry.get("city") if isinstance(entry, dict) else "") or city
+        name = str(name).strip()
+        if not name:
+            continue
+        results.append({"venue": name, **venue_rating(name, str(where).strip())})
+
+    return {"results": results, "found": sum(1 for r in results if r.get("found"))}

@@ -26,9 +26,14 @@ from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import Itinerary, TripSpec
 from wayfinder.specs import load_itinerary_payload
 from wayfinder.tools.flights import flight_search
-from wayfinder.tools.geo import estimate_travel, geocode
+from wayfinder.tools.geo import (
+    estimate_travel,
+    estimate_travel_all,
+    geocode,
+    geocode_all,
+)
 from wayfinder.tools.money import fx_convert
-from wayfinder.tools.ratings import venue_rating
+from wayfinder.tools.ratings import venue_rating, venue_ratings
 from wayfinder.tools.search import web_search
 from wayfinder.verify import ConstraintReport, check_payload
 
@@ -375,12 +380,17 @@ def build_agent(
     live = spec if isinstance(spec, LiveSpec) else None
     fixed = live.current if live else spec
 
+    # Batch variants first: a model picking a tool reads the list top-down, and
+    # one turn per venue is what made a two-day trip take thirteen minutes.
     research_tools = [
         web_search,
+        geocode_all,
+        estimate_travel_all,
+        venue_ratings,
         geocode,
         estimate_travel,
-        fx_convert,
         venue_rating,
+        fx_convert,
         flight_search,
     ]
     tools = list(research_tools)

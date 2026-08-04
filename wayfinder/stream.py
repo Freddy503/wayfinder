@@ -493,8 +493,11 @@ def _summarise_call(name: str, args: dict[str, Any]) -> str:
 _NARRATION: dict[str, str] = {
     "web_search": "Looking up",
     "geocode": "Finding",
+    "geocode_all": "Locating the shortlist",
     "venue_rating": "Checking reviews for",
+    "venue_ratings": "Checking reviews",
     "estimate_travel": "Timing the trip from",
+    "estimate_travel_all": "Timing the route",
     "fx_convert": "Converting",
     "flight_search": "Searching flights",
     "check_itinerary": "Checking the plan",
@@ -527,6 +530,14 @@ def narrate(name: str, args: dict[str, Any]) -> str:
     verb = _NARRATION.get(name)
     if verb is None:
         return f"{name}{f' — {detail}' if detail else ''}"
+    # Batch calls describe themselves by size, not by a first-item preview
+    # that would misrepresent the other fifteen.
+    if name == "geocode_all":
+        return f"{verb} ({len(args.get('places') or [])} places)"
+    if name == "venue_ratings":
+        return f"{verb} ({len(args.get('venues') or [])} venues)"
+    if name == "estimate_travel_all":
+        return f"{verb} ({len(args.get('legs') or [])} hops)"
     if name in {"check_itinerary", "finalize_itinerary", "write_todos", "flight_search"}:
         return verb
     return f"{verb} {detail}".strip() if detail else verb

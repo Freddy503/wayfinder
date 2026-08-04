@@ -144,3 +144,104 @@ def estimate_travel(origin: str, destination: str, mode: str = "walk") -> dict:
         "straight_line_km": round(km, 2),
         "note": "Straight-line estimate with a 1.3 routing factor; not a routed time.",
     }
+
+
+# --------------------------------------------------------------------------
+# Batch variants
+#
+# The single-item tools are correct and were murderously slow to use: a
+# two-day Bruges trip spent 27 turns geocoding and 35 estimating travel, one
+# network round trip and one model turn each, for what is a cached lookup and
+# some arithmetic. Ten minutes of wall clock, almost none of it thinking.
+#
+# Prompt wording did not fix this — tried twice, measured twice, no movement.
+# So the shape of the tool changes instead: ask for everything at once and the
+# model cannot spend a turn per item even if it wants to.
+# --------------------------------------------------------------------------
+
+#: Enough for a week's itinerary in one call; a guard against a model that
+#: pastes its entire candidate list in rather than its shortlist.
+MAX_BATCH = 60
+
+
+def geocode_all(places: list[str]) -> dict:
+    """Look up coordinates for several places at once.
+
+    Prefer this over calling `geocode` repeatedly: one call handles your whole
+    shortlist, and results are cached, so re-looking-up a place you already
+    found costs nothing.
+
+    Args:
+        places: Names including the city, e.g.
+            ["Belfort, Bruges", "Groeningemuseum, Bruges"]. Up to 60.
+
+    Returns:
+        `{"results": [...], "found": n, "missing": [...]}` — one entry per
+        input, in order, each shaped exactly like `geocode`'s return. Anything
+        in `missing` could not be located: search for the correct name rather
+        than inventing coordinates.
+    """
+    if not isinstance(places, list):
+        places = [places]
+    if len(places) > MAX_BATCH:
+        return {
+            "error": f"{len(places)} places is more than the {MAX_BATCH} limit — "
+            "send your shortlist, not every candidate.",
+            "results": [],
+        }
+
+    results = [geocode(p) for p in places if str(p).strip()]
+    return {
+        "results": results,
+        "found": sum(1 for r in results if r["found"]),
+        "missing": [r["query"] for r in results if not r["found"]],
+    }
+
+
+def estimate_travel_all(legs: list[dict], mode: str = "walk") -> dict:
+    """Estimate travel time for several hops at once.
+
+    Prefer this over calling `estimate_travel` repeatedly. Send the hops your
+    itinerary actually makes — consecutive stops, in order — not every pair of
+    places. An itinerary needs the moves it schedules, and nothing else.
+
+    Args:
+        legs: `[{"origin": ..., "destination": ..., "mode": ...}, ...]`. `mode`
+            is optional per leg and falls back to the `mode` argument. Up to 60.
+        mode: Default mode for legs that don't name one. One of walk, bike,
+            transit, taxi, other.
+
+    Returns:
+        `{"results": [...], "total_minutes": n, "failed": [...]}` — one entry
+        per leg, in order, each shaped exactly like `estimate_travel`'s return
+        plus the `origin` and `destination` it was for.
+    """
+    if not isinstance(legs, list):
+        legs = [legs]
+    if len(legs) > MAX_BATCH:
+        return {
+            "error": f"{len(legs)} legs is more than the {MAX_BATCH} limit — "
+            "send the hops your itinerary makes, not every pair.",
+            "results": [],
+        }
+
+    results = []
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        origin = str(leg.get("origin", "")).strip()
+        destination = str(leg.get("destination", "")).strip()
+        if not origin or not destination:
+            continue
+        outcome = estimate_travel(origin, destination, leg.get("mode") or mode)
+        results.append({"origin": origin, "destination": destination, **outcome})
+
+    return {
+        "results": results,
+        "total_minutes": sum(r["minutes"] for r in results if r.get("ok")),
+        "failed": [
+            {"origin": r["origin"], "destination": r["destination"], "reason": r["reason"]}
+            for r in results
+            if not r.get("ok")
+        ],
+    }

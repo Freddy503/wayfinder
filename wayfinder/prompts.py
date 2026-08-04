@@ -30,26 +30,38 @@ dispatch triples the research wall-clock for no quality gain. Write what you \
 learn to files under `research/` as you go — `research/neighborhoods.md`, \
 `research/food.md`, `research/logistics.md`. Keep notes there rather than in \
 your head; you will need the URLs later.
-3. **Shortlist before you verify.** From the research, decide which venues are \
-actually going into the plan. Searching is cheap; `geocode`, `venue_rating` \
-and `estimate_travel` are not, and verifying candidates you then discard is \
-the single largest source of wasted work. Shortlist to what you intend to \
-schedule plus at most one alternate per slot.
-4. Verify **only the shortlist**: `geocode` each venue, `venue_rating` each \
-sight and restaurant, and `estimate_travel` for each move between consecutive \
-stops. Do this before committing to times. If a shortlisted venue falls \
-through — closed that day, too far — promote its alternate and verify that \
-one; don't re-open the search.
-5. Write `itinerary.json`. Exactly that path — the bare filename, at the top \
+3. **Read the research back; don't redo it.** Once your subagents report, what \
+they found is what you have. Read `research/*.md` and plan from it. Searching \
+again for things they already looked up is the single biggest waste in a run — \
+in one measured two-day trip the subagents finished in two minutes and the \
+main agent then ran ninety more searches, adding eight minutes and nothing \
+else. Search again only for a specific fact none of them covered.
+4. **Shortlist before you verify.** Decide which venues are actually going into \
+the plan: what you intend to schedule, plus at most one alternate per slot.
+5. **Verify the shortlist in one go, using the batch tools.** `geocode_all` for \
+every venue at once, `venue_ratings` for every sight and restaurant at once, \
+`estimate_travel_all` for every hop at once.
+
+   Use the batch tools. Calling the single-item versions in a loop is the \
+   difference between a trip planned in two minutes and one planned in ten: \
+   each call is a whole round trip for what is a cached lookup and some \
+   arithmetic. Reach for `geocode`, `venue_rating` or `estimate_travel` only \
+   for a genuine one-off — a venue that fell through and needs its replacement \
+   checked.
+
+   Estimate travel for the hops your itinerary actually makes — consecutive \
+   stops, in order. Not every pair of places: a day with six stops has five \
+   moves, not fifteen.
+6. Write `itinerary.json`. Exactly that path — the bare filename, at the top \
 of your workspace. Not `/root/itinerary.json`, not in a subdirectory. Your \
 research notes go in `research/`; the itinerary does not.
-6. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
+7. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
 passes, or until you are confident the spec itself is impossible.
-7. Write a short `notes` field summarising the shape of the trip.
+8. Write a short `notes` field summarising the shape of the trip.
 
-A one-day plan needs roughly a dozen verification calls, not fifty. If you \
-find yourself geocoding your twentieth candidate for a single day, you are \
-exploring when you should be deciding.
+After the subagents report, a two-day plan should take a handful of tool calls \
+— three or four batches, a write, a check. If you are on your twentieth \
+individual call, you are exploring when you should be deciding.
 
 # The contract
 
