@@ -418,8 +418,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/defaults")
     def defaults() -> dict[str, Any]:
+        from wayfinder.models import catalog
+
         return {
             "config": asdict(AgentConfig()),
+            "models": catalog(),
             "tools": [
                 "web_search",
                 "geocode",

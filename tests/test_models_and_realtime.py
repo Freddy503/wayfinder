@@ -128,6 +128,47 @@ def test_nothing_reaches_a_provider_the_default_run_has_no_key_for():
     assert not stray, f"these need a second provider's key: {stray}"
 
 
+def test_the_ui_hardcodes_no_model_ids():
+    """The dropdown was three `<option value="anthropic:…">` tags, and the
+    browser sends its selection explicitly — so it beat the server default and
+    every web run went to a provider the config had already left behind.
+    Fixing the server default alone did nothing; the page has to stop naming
+    models at all."""
+    import pathlib
+    import re
+
+    page = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "wayfinder" / "web" / "index.html"
+    ).read_text()
+    code = re.sub(r"<!--.*?-->", "", page, flags=re.S)   # comments may cite them
+    literals = re.findall(r"\b(?:anthropic|openrouter|openai):[\w./-]+", code)
+    assert not literals, f"model ids belong in models.CATALOG: {set(literals)}"
+
+
+def test_the_catalog_offers_the_default_and_flags_what_needs_a_key(monkeypatch):
+    from wayfinder.agent import AgentConfig
+    from wayfinder.models import catalog
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    entries = {m["spec"]: m for m in catalog()}
+    assert AgentConfig().model in entries, "the default must be selectable"
+    assert entries[AgentConfig().model]["available"] is True
+    # No Anthropic key set by the fixture, so direct Anthropic must show as
+    # unusable rather than silently failing minutes into a run.
+    assert entries["anthropic:claude-sonnet-5"]["available"] is False
+    assert entries["anthropic:claude-sonnet-5"]["key"] == "ANTHROPIC_API_KEY"
+
+
+def test_defaults_endpoint_serves_the_catalog():
+    from fastapi.testclient import TestClient
+
+    from wayfinder.server import create_app
+
+    body = TestClient(create_app()).get("/api/defaults").json()
+    assert body["config"]["model"] in {m["spec"] for m in body["models"]}
+
+
 def test_no_module_builds_an_anthropic_client_directly():
     """`resolve_model` is the only place allowed to construct a client, so
     that changing provider is one edit rather than a search."""

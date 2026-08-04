@@ -422,11 +422,11 @@
       <summary>Harness &amp; approvals</summary>
       <div class="card" style="margin-top:10px">
         <label>Model</label>
-        <select id="o-model">
-          <option value="anthropic:claude-sonnet-5" selected>Sonnet 5</option>
-          <option value="anthropic:claude-opus-5">Opus 5</option>
-          <option value="anthropic:claude-haiku-4-5">Haiku 4.5</option>
-        </select>
+        <!-- Filled from /api/defaults. Hardcoding options here is how the UI
+             ended up sending anthropic:claude-sonnet-5 long after the default
+             had moved — and it sends this value explicitly, so it wins. -->
+        <select id="o-model"></select>
+        <div class="hint" id="o-model-note" style="margin-top:4px"></div>
         <div class="check" style="margin-top:10px"><input type="checkbox" id="o-sub" checked><span>Research subagents</span></div>
         <div class="check"><input type="checkbox" id="o-skills" checked><span>Skills</span></div>
         <div class="check"><input type="checkbox" id="o-repair" checked><span>Repair loop</span></div>
@@ -1702,7 +1702,9 @@ async function start() {
     res = await fetch("/api/plan", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
-        spec, model: $("o-model").value,
+        // Omitted rather than sent empty if the list failed to load, so the
+        // server falls back to its own default instead of being handed "".
+        spec, ...($("o-model").value ? { model: $("o-model").value } : {}),
         subagents: $("o-sub").checked, skills: $("o-skills").checked,
         repair: $("o-repair").checked, interrupt_on: interrupts,
       }),
@@ -1742,6 +1744,28 @@ $("go").onclick = start;
     wrap.append(box, el("span", null, t));
     host.append(wrap);
   });
+
+  // The model list is the server's to state, so the browser can't send a
+  // model the server was never configured for.
+  try {
+    const { config, models } = await (await fetch("/api/defaults")).json();
+    const sel = $("o-model");
+    (models || []).forEach(m => {
+      const o = el("option", null, m.label + (m.available ? "" : ` — needs ${m.key}`));
+      o.value = m.spec;
+      o.disabled = !m.available;
+      if (m.spec === config.model) o.selected = true;
+      sel.append(o);
+    });
+    const note = () => {
+      const picked = (models || []).find(m => m.spec === sel.value);
+      $("o-model-note").textContent =
+        picked && picked.spec !== config.model ? `overriding the default (${config.model})` : "";
+    };
+    sel.onchange = note; note();
+  } catch (e) {
+    $("o-model-note").textContent = "could not load the model list: " + e;
+  }
 
   try {
     const cases = await (await fetch("/api/examples")).json();

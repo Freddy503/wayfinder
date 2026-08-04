@@ -83,3 +83,43 @@ def label_of(spec: Any) -> str:
     if not isinstance(spec, str):
         return type(spec).__name__
     return spec.split("/")[-1].split(":")[-1]
+
+
+#: What the web UI offers, as `(spec, label)`. Lives here rather than in the
+#: HTML because a hardcoded `<option>` list is a model literal like any other:
+#: the dropdown kept three Anthropic options long after the default moved, and
+#: since the browser sends its selection explicitly, every web run silently
+#: ignored the default and billed the old provider.
+CATALOG: tuple[tuple[str, str], ...] = (
+    ("openrouter:deepseek/deepseek-v4-flash", "DeepSeek v4 Flash — cheap, default"),
+    ("openrouter:deepseek/deepseek-v4-pro", "DeepSeek v4 Pro"),
+    ("openrouter:anthropic/claude-sonnet-5", "Claude Sonnet 5 (via OpenRouter)"),
+    ("anthropic:claude-sonnet-5", "Claude Sonnet 5 (direct)"),
+    ("anthropic:claude-opus-5", "Claude Opus 5 (direct)"),
+)
+
+
+def is_available(spec: Any) -> bool:
+    """Whether the key this model needs is actually set.
+
+    Lets the UI say "needs ANTHROPIC_API_KEY" up front instead of letting you
+    pick a model that fails several minutes into a run.
+    """
+    key = required_key_for(spec)
+    if key is None:
+        return True
+    value = os.environ.get(key, "").strip()
+    return bool(value) and not value.lower().startswith("paste")
+
+
+def catalog() -> list[dict[str, Any]]:
+    """The model list the browser builds its dropdown from."""
+    return [
+        {
+            "spec": spec,
+            "label": label,
+            "available": is_available(spec),
+            "key": required_key_for(spec),
+        }
+        for spec, label in CATALOG
+    ]
