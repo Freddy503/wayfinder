@@ -571,3 +571,52 @@ def test_an_impossible_change_is_refused_with_a_readable_reason():
         session.adjust(AdjustRequest(changes={"budget": -1}))
     assert "greater than zero" in str(exc.value.detail)
     assert session.live.current.budget.total == 900
+
+
+def test_writing_the_itinerary_is_narrated_as_the_thing_it_is():
+    from wayfinder.stream import narrate
+
+    assert narrate("write_file", {"file_path": "itinerary.json"}) == \
+        "Putting your itinerary together"
+    assert narrate("write_file", {"file_path": "/root/itinerary.json"}) == \
+        "Putting your itinerary together"
+    # Research notes stay literal — there's no better phrase for them.
+    assert narrate("write_file", {"file_path": "research/food.md"}) == \
+        "Writing research/food.md"
+
+
+@pytest.mark.parametrize(
+    ("bullet", "name", "detail"),
+    [
+        ("**Cervejaria Ramiro** — no reservations, expect a queue",
+         "Cervejaria Ramiro", "no reservations, expect a queue"),
+        ("Sea Me: Chiado, pricier", "Sea Me", "Chiado, pricier"),
+        ("Musea Brugge Card - €49 for 72h", "Musea Brugge Card", "€49 for 72h"),
+        # Bold markers mid-string: `.strip()` can't reach these, so they have
+        # to be removed before any splitting decision.
+        ("No markets** on your dates", "No markets on your dates", ""),
+        ("Most museums close on Mondays.", "Most museums close on Mondays.", ""),
+    ],
+)
+def test_a_finding_splits_into_a_name_and_the_rest(bullet, name, detail):
+    from wayfinder.stream import _split_finding
+
+    assert _split_finding(bullet) == (name, detail)
+
+
+def test_a_prose_bullet_is_not_forced_into_a_name():
+    """A dash two sentences in would otherwise put a whole paragraph in the
+    bold name slot and a four-word fragment underneath it."""
+    from wayfinder.stream import _split_finding
+
+    prose = ("Walkability is excellent. The centre is compact; station to Markt "
+             "is a 20-min walk. Cobblestones — wear comfortable shoes.")
+    name, detail = _split_finding(prose)
+    assert detail == ""
+    assert name == prose
+
+
+def test_the_earliest_separator_wins():
+    from wayfinder.stream import _split_finding
+
+    assert _split_finding("Belfry: climb it - 366 steps") == ("Belfry", "climb it - 366 steps")

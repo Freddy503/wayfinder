@@ -1833,6 +1833,15 @@ function trimProgress(host) {
   for (let i = 0; i < steps.length - 40; i++) steps[i].remove();
 }
 
+/* Housekeeping the traveller has no stake in: loading its own skill files,
+   shuffling notes between paths, keeping a todo list. All of it still lands in
+   the raw feed — it's just not progress on anyone's holiday. */
+const PLUMBING = new Set(["write_todos", "read_file", "edit_file", "ls", "glob", "grep"]);
+function plumbing(d) {
+  if (PLUMBING.has(d.name)) return true;
+  return d.name === "write_file" && /skills|todos/.test(d.summary || "");
+}
+
 /* First sentence, trimmed. Enough to say what a subagent is doing without
    replaying the spec at you. */
 function briefly(text, limit = 90) {
@@ -2025,7 +2034,7 @@ const HANDLERS = {
     feedAdd(evNode("t-tool" + (sub ? " nested" : ""), "→", d.name, d.summary));
     // A subagent's own tool calls belong inside its card, not as another
     // top-level line — otherwise three researchers interleave into noise.
-    if (!sub) stepRow(d.narration || d.summary || d.name);
+    if (!sub && !plumbing(d)) stepRow(d.narration || d.summary || d.name);
   },
   "tool.result": d => {
     if (d.ok) return;

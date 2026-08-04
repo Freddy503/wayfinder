@@ -408,21 +408,38 @@ def _findings(content: Any) -> list[dict[str, str]]:
         if not _MIN_FINDING <= len(body) <= _MAX_FINDING:
             continue
 
-        # "**Name** — detail", "Name: detail", "Name — detail" all show up
-        # depending on the model's mood. Split on whichever comes first.
-        name, detail = body, ""
-        stripped = body.replace("**", "")
-        for sep in (" — ", " – ", ": ", " - "):
-            if sep in stripped:
-                name, detail = stripped.split(sep, 1)
-                break
-
-        findings.append(
-            {"name": name.strip(" *_"), "detail": detail.strip(), "section": section}
-        )
+        name, detail = _split_finding(body)
+        findings.append({"name": name, "detail": detail, "section": section})
         if len(findings) >= _MAX_FINDINGS:
             break
     return findings
+
+
+#: Past this, what's on the left of the dash is a sentence, not a name.
+_MAX_NAME = 60
+
+
+def _split_finding(body: str) -> tuple[str, str]:
+    """Split "**Ramiro** — no reservations" into a name and the rest.
+
+    Two things this gets right that the obvious version doesn't. Bold markers
+    are stripped up front, not only on the branch that splits — otherwise a
+    bullet with no separator keeps its `**` in the middle, where `.strip()`
+    can't reach. And the *earliest* separator wins, with a length cap: a
+    prose bullet containing a dash two sentences in would otherwise put a
+    130-character paragraph in the bold name slot and a fragment underneath.
+    """
+    text = body.replace("**", "").replace("__", "").strip(" *_")
+    best: tuple[int, str] | None = None
+    for sep in (" — ", " – ", " - ", ": "):
+        at = text.find(sep)
+        if at != -1 and (best is None or at < best[0]):
+            best = (at, sep)
+
+    if best is None or best[0] > _MAX_NAME:
+        return text, ""
+    at, sep = best
+    return text[:at].strip(" *_"), text[at + len(sep):].strip()
 
 
 def _numbered(line: str) -> bool:
@@ -505,6 +522,8 @@ def narrate(name: str, args: dict[str, Any]) -> str:
     something unrecognised — a wrong description is worse than a bare one.
     """
     detail = _summarise_call(name, args)
+    if name == "write_file" and detail.endswith("itinerary.json"):
+        return "Putting your itinerary together"
     verb = _NARRATION.get(name)
     if verb is None:
         return f"{name}{f' — {detail}' if detail else ''}"
