@@ -17,7 +17,10 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
-EXTRACT_MODEL = "claude-haiku-4-5"
+#: Parsing a monologue into a dozen fields is a much smaller job than planning
+#: a trip, so it runs on the cheap end of the same provider the planner uses —
+#: not on a second provider whose key you'd have to keep funded just for this.
+EXTRACT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
 
 _SYSTEM = """\
 You extract trip-planning requirements from a rambling, unstructured \
@@ -63,9 +66,9 @@ REQUIRED: tuple[str, ...] = ("destination", "dates", "budget")
 
 
 def _default_extractor(transcript: str) -> ExtractedRequirements:
-    from langchain_anthropic import ChatAnthropic
+    from wayfinder.models import resolve_model
 
-    llm = ChatAnthropic(model=EXTRACT_MODEL, max_tokens=1000, temperature=0)
+    llm = resolve_model(EXTRACT_MODEL)
     structured = llm.with_structured_output(ExtractedRequirements)
     today = date.today()
     prompt = (

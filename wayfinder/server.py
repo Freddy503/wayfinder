@@ -60,7 +60,10 @@ DONE = Event("run.done", {})
 
 class PlanRequest(BaseModel):
     spec: dict[str, Any]
-    model: str = "anthropic:claude-sonnet-5"
+    #: Deferred to `AgentConfig` rather than repeated. Hardcoding it here meant
+    #: the CLI and the browser could disagree about which model runs — and they
+    #: silently did, so a provider switch left the web path billing the old one.
+    model: str = Field(default_factory=lambda: AgentConfig().model)
     subagents: bool = True
     skills: bool = True
     repair: bool = True

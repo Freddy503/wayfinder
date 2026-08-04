@@ -91,6 +91,57 @@ def test_agent_config_defaults_to_deepseek_via_openrouter():
     assert config.label().startswith("deepseek-v4-flash")
 
 
+def test_the_browser_and_the_cli_plan_with_the_same_model():
+    """These were two separate string literals, and they drifted: switching
+    the default to OpenRouter left every web run still billing Anthropic, so
+    the first real run died on an Anthropic credit error with no Anthropic
+    model anywhere in the config."""
+    from wayfinder.agent import AgentConfig
+    from wayfinder.server import PlanRequest
+
+    assert PlanRequest(spec={}).model == AgentConfig().model
+
+
+def test_nothing_reaches_a_provider_the_default_run_has_no_key_for():
+    """Every model a default run touches must belong to one provider.
+
+    The failure this catches is quiet: a stray `ChatAnthropic(...)` in a corner
+    of the codebase works fine as long as the key happens to be funded, then
+    takes down a run that has nothing to do with Anthropic.
+    """
+    from wayfinder.agent import AgentConfig
+    from wayfinder.extract import EXTRACT_MODEL
+    from wayfinder.evals.evaluators import JUDGE_MODEL
+
+    config = AgentConfig()
+    defaults = {
+        "planner": config.model,
+        "subagents": config.subagent_model or config.model,
+        "transcript extractor": EXTRACT_MODEL,
+        "judges": JUDGE_MODEL,
+    }
+    stray = {
+        role: spec
+        for role, spec in defaults.items()
+        if required_key_for(spec) != "OPENROUTER_API_KEY"
+    }
+    assert not stray, f"these need a second provider's key: {stray}"
+
+
+def test_no_module_builds_an_anthropic_client_directly():
+    """`resolve_model` is the only place allowed to construct a client, so
+    that changing provider is one edit rather than a search."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "wayfinder"
+    offenders = [
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if "ChatAnthropic(" in path.read_text()
+    ]
+    assert not offenders, f"bypassing resolve_model: {offenders}"
+
+
 def test_every_matrix_arm_still_differs_in_exactly_one_way():
     from dataclasses import asdict
 
