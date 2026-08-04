@@ -2198,6 +2198,9 @@ $("trip-new").onclick = () => {
   // still land in the run directory either way.
   document.body.classList.remove("planning");
   $("live-card").style.display = "none";
+  // Re-enable Plan. Rejoining a run disables it, so without this the one
+  // button labelled "plan a different trip" led to a form you couldn't submit.
+  $("go").disabled = false; $("w-next").disabled = false;
 };
 
 /* ---------------- boot ---------------- */
