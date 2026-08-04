@@ -227,3 +227,69 @@ def test_batches_are_narrated_by_size(name, args, expected):
     from wayfinder.stream import narrate
 
     assert narrate(name, args) == expected
+
+
+# --------------------------------------------------------------------------
+# What the model actually sends
+#
+# The type hints are the tool schema, and the schema is validated before the
+# function runs — so a docstring saying "plain strings work" while the hint
+# says `list[dict]` is not a lenient function, it is a rejected call and a
+# wasted turn. A live run hit exactly this: eight venue names, refused with
+# "venues.0: Input should be a valid dictionary".
+# --------------------------------------------------------------------------
+
+
+def tool_schema(fn):
+    """The JSON schema LangChain will validate the model's call against."""
+    from langchain_core.tools import tool as as_tool
+
+    return as_tool(fn).args_schema.model_json_schema()
+
+
+def accepts(fn, field: str, payload) -> bool:
+    from langchain_core.tools import tool as as_tool
+
+    try:
+        as_tool(fn).args_schema.model_validate({field: payload})
+    except Exception:
+        return False
+    return True
+
+
+def test_venue_ratings_accepts_a_list_of_names():
+    """What a model sends nine times out of ten, and what the docstring
+    promises. It was rejected by the schema before the function ever ran."""
+    assert accepts(ratings.venue_ratings, "venues", ["Belfort, Bruges", "De Garre, Bruges"])
+
+
+def test_venue_ratings_still_accepts_the_dict_form():
+    assert accepts(ratings.venue_ratings, "venues", [{"venue": "Bocca", "city": "Bruges"}])
+
+
+def test_estimate_travel_all_accepts_an_arrow_string():
+    assert accepts(geo.estimate_travel_all, "legs", ["Markt, Bruges -> Belfort, Bruges"])
+
+
+@pytest.mark.parametrize("arrow", ["->", "→", "—", "--"])
+def test_the_usual_arrows_all_parse(fake_places, arrow):
+    out = geo.estimate_travel_all([f"Markt, Bruges {arrow} Belfort, Bruges"])
+    assert out["results"][0]["origin"] == "Markt, Bruges"
+    assert out["results"][0]["destination"] == "Belfort, Bruges"
+    assert out["results"][0]["ok"] is True
+
+
+def test_a_string_leg_with_no_arrow_is_skipped_not_crashed(fake_places):
+    out = geo.estimate_travel_all(["just one place"])
+    assert out["results"] == []
+
+
+def test_every_batch_tool_documents_the_forms_it_accepts():
+    """The docstring is what the model reads to decide how to call it."""
+    for fn, forms in (
+        (geo.geocode_all, ["Up to 60"]),
+        (geo.estimate_travel_all, ["Up to 60", "origin"]),
+        (ratings.venue_ratings, ["Up to 40", "plain strings"]),
+    ):
+        for form in forms:
+            assert form in (fn.__doc__ or ""), f"{fn.__name__} should mention {form!r}"

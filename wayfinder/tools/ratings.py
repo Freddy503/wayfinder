@@ -98,15 +98,16 @@ def venue_rating(venue: str, city: str) -> dict:
 MAX_BATCH = 40
 
 
-def venue_ratings(venues: list[dict], city: str = "") -> dict:
+def venue_ratings(venues: list[dict | str], city: str = "") -> dict:
     """Look up review ratings for several venues at once.
 
     Prefer this over calling `venue_rating` repeatedly — do your whole
     shortlist in one call.
 
     Args:
-        venues: `[{"venue": ..., "city": ...}, ...]`, or plain names as strings
-            if they're all in the same `city`. Up to 40.
+        venues: Names as plain strings — `["Belfort, Bruges", ...]` — or
+            `[{"venue": ..., "city": ...}, ...]` if they're in different
+            cities. Up to 40.
         city: Default city for entries that don't name one.
 
     Returns:

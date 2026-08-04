@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 
 import httpx
 
@@ -198,7 +199,7 @@ def geocode_all(places: list[str]) -> dict:
     }
 
 
-def estimate_travel_all(legs: list[dict], mode: str = "walk") -> dict:
+def estimate_travel_all(legs: list[dict | str], mode: str = "walk") -> dict:
     """Estimate travel time for several hops at once.
 
     Prefer this over calling `estimate_travel` repeatedly. Send the hops your
@@ -207,7 +208,8 @@ def estimate_travel_all(legs: list[dict], mode: str = "walk") -> dict:
 
     Args:
         legs: `[{"origin": ..., "destination": ..., "mode": ...}, ...]`. `mode`
-            is optional per leg and falls back to the `mode` argument. Up to 60.
+            is optional per leg and falls back to the `mode` argument. A leg may
+            also be the string `"origin -> destination"`. Up to 60.
         mode: Default mode for legs that don't name one. One of walk, bike,
             transit, taxi, other.
 
@@ -227,6 +229,12 @@ def estimate_travel_all(legs: list[dict], mode: str = "walk") -> dict:
 
     results = []
     for leg in legs:
+        # Models reach for `"A -> B"` about as often as the dict form; refusing
+        # it costs a whole retry turn, which is exactly what this tool exists
+        # to avoid.
+        if isinstance(leg, str):
+            parts = re.split(r"\s*(?:->|→|—|--)\s*", leg, maxsplit=1)
+            leg = {"origin": parts[0], "destination": parts[1] if len(parts) > 1 else ""}
         if not isinstance(leg, dict):
             continue
         origin = str(leg.get("origin", "")).strip()
