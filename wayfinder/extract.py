@@ -17,10 +17,12 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
+from wayfinder.models import DEFAULT_MODEL
+
 #: Parsing a monologue into a dozen fields is a much smaller job than planning
 #: a trip, so it runs on the cheap end of the same provider the planner uses —
 #: not on a second provider whose key you'd have to keep funded just for this.
-EXTRACT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
+EXTRACT_MODEL = DEFAULT_MODEL
 
 _SYSTEM = """\
 You extract trip-planning requirements from a rambling, unstructured \

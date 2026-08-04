@@ -22,10 +22,17 @@ from typing import Any
 
 from openevals.llm import create_llm_as_judge
 
-#: Judges run on a cheaper model than the planner. Grading is a much easier task
-#: than planning, and a judge that costs as much as the run makes the eval
-#: matrix too expensive to sweep — which is the thing you actually want to do.
-JUDGE_MODEL = "openrouter:deepseek/deepseek-v4-pro"
+from wayfinder.models import DEFAULT_MODEL
+
+#: The same model the planner uses, since it's the only one configured.
+#:
+#: Worth knowing what that costs: a judge grading its own family's output tends
+#: to rate it generously, so `taste_match`, `groundedness` and `readability`
+#: are best read as trends across arms rather than as absolute scores. The code
+#: evaluators have no such problem — which is the argument for leaning on them,
+#: and the reason this project has only three judges. Pass
+#: `build_evaluators(judge_model=...)` for a second opinion from another family.
+JUDGE_MODEL = DEFAULT_MODEL
 
 
 def _metrics(outputs: dict[str, Any]) -> dict[str, float]:

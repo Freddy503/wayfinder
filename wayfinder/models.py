@@ -4,7 +4,7 @@ Providers are named by a `prefix:id` spec so nothing downstream has to care
 which one is in use:
 
     openrouter:deepseek/deepseek-v4-flash
-    anthropic:claude-sonnet-5
+    openrouter:anthropic/claude-sonnet-5
     openai:gpt-5.5
 
 The eval matrix, the CLI and the server all pass strings around; only this
@@ -17,6 +17,16 @@ import os
 from typing import Any
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+#: The only model this project plans with. Everything that runs by default —
+#: planner, subagents, transcript extractor, judges — resolves to this.
+DEFAULT_MODEL = "openrouter:deepseek/deepseek-v4-flash"
+
+#: Providers that must never be reached directly. `openrouter:anthropic/…` is
+#: fine — that bills OpenRouter. What's blocked is the direct API, because a
+#: stray `anthropic:` spec would silently bill a second account, which is
+#: exactly what happened twice while switching provider.
+BLOCKED_PROVIDERS = frozenset({"anthropic"})
 
 #: Sent by OpenRouter's convention so usage is attributable to this app.
 OPENROUTER_HEADERS = {
@@ -53,6 +63,14 @@ def resolve_model(spec: Any) -> Any:
         return spec
 
     provider, _, model_id = spec.partition(":")
+    if provider in BLOCKED_PROVIDERS:
+        msg = (
+            f"{spec!r} would call the {provider} API directly, which this "
+            f"project does not use. Route it through OpenRouter instead "
+            f"(e.g. 'openrouter:{provider}/{model_id}'), or use "
+            f"{DEFAULT_MODEL!r}."
+        )
+        raise RuntimeError(msg)
     if provider != "openrouter":
         return spec
 
@@ -91,19 +109,15 @@ def label_of(spec: Any) -> str:
 #: since the browser sends its selection explicitly, every web run silently
 #: ignored the default and billed the old provider.
 CATALOG: tuple[tuple[str, str], ...] = (
-    ("openrouter:deepseek/deepseek-v4-flash", "DeepSeek v4 Flash — cheap, default"),
-    ("openrouter:deepseek/deepseek-v4-pro", "DeepSeek v4 Pro"),
-    ("openrouter:anthropic/claude-sonnet-5", "Claude Sonnet 5 (via OpenRouter)"),
-    ("anthropic:claude-sonnet-5", "Claude Sonnet 5 (direct)"),
-    ("anthropic:claude-opus-5", "Claude Opus 5 (direct)"),
+    (DEFAULT_MODEL, "DeepSeek v4 Flash"),
 )
 
 
 def is_available(spec: Any) -> bool:
     """Whether the key this model needs is actually set.
 
-    Lets the UI say "needs ANTHROPIC_API_KEY" up front instead of letting you
-    pick a model that fails several minutes into a run.
+    Lets the UI name the missing variable up front instead of offering a model
+    that fails several minutes into a run.
     """
     key = required_key_for(spec)
     if key is None:

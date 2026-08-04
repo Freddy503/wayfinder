@@ -35,11 +35,11 @@ EXPERIMENT_MATRIX: dict[str, AgentConfig] = {
     "no-skills": replace(BASELINE, use_skills=False),
     "no-subagents": replace(BASELINE, use_subagents=False),
     "one-researcher": replace(BASELINE, single_researcher=True),
-    #: DeepSeek v4 Pro over Flash — same family, more capability, ~3x the price.
+    #: The model-tiering arm, and the only one that isn't Flash. Same family,
+    #: more capability, ~3x the price — it answers "does the harness need a
+    #: better model, or does the checker close the gap?" without leaving
+    #: OpenRouter. Opt-in via `--arm deepseek-pro`; nothing runs it by default.
     "deepseek-pro": replace(BASELINE, model="openrouter:deepseek/deepseek-v4-pro"),
-    #: The frontier comparison. Roughly 20x Flash's input price, so the
-    #: question is whether the harness needs it or the checker closes the gap.
-    "sonnet-throughout": replace(BASELINE, model="anthropic:claude-sonnet-5"),
 }
 
 

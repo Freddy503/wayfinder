@@ -19,7 +19,7 @@ import yaml
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 
-from wayfinder.models import resolve_model
+from wayfinder.models import DEFAULT_MODEL, resolve_model
 from wayfinder.prompts import MAIN_PROMPT
 from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import Itinerary, TripSpec
@@ -56,7 +56,7 @@ class AgentConfig:
     """
 
     #: A model spec (`provider:id`) or a chat model instance.
-    model: Any = "openrouter:deepseek/deepseek-v4-flash"
+    model: Any = DEFAULT_MODEL
     #: Subagents inherit `model` unless this is set. Sweeping it answers "does
     #: the cheap model do the research just as well?"
     subagent_model: str | None = None

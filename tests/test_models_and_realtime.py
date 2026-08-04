@@ -62,7 +62,31 @@ def test_openrouter_without_a_key_says_which_variable(monkeypatch):
 def test_other_providers_pass_through_untouched():
     """LangChain already understands these; building a client here would
     duplicate its logic and diverge from it."""
-    assert resolve_model("anthropic:claude-sonnet-5") == "anthropic:claude-sonnet-5"
+    assert resolve_model("openai:gpt-5.5") == "openai:gpt-5.5"
+
+
+def test_the_anthropic_api_cannot_be_reached_even_if_asked():
+    """Twice, a stray `anthropic:` literal took down a run configured entirely
+    for OpenRouter — once in the server default, once in the UI dropdown. The
+    key is gone now, but a missing key fails deep in the run with a billing
+    error; this fails immediately and says what to do instead."""
+    from wayfinder.models import BLOCKED_PROVIDERS
+
+    assert "anthropic" in BLOCKED_PROVIDERS
+    with pytest.raises(RuntimeError, match="openrouter:anthropic/claude-sonnet-5"):
+        resolve_model("anthropic:claude-sonnet-5")
+
+
+def test_the_block_is_on_the_direct_api_not_the_vendor():
+    """Claude through OpenRouter bills the OpenRouter balance, which is fine —
+    what's blocked is the second account, not the model family."""
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    try:
+        model = resolve_model("openrouter:anthropic/claude-sonnet-5")
+        assert model.openai_api_base == OPENROUTER_BASE_URL
+    finally:
+        monkeypatch.undo()
 
 
 def test_model_instances_pass_through():
@@ -146,18 +170,55 @@ def test_the_ui_hardcodes_no_model_ids():
     assert not literals, f"model ids belong in models.CATALOG: {set(literals)}"
 
 
-def test_the_catalog_offers_the_default_and_flags_what_needs_a_key(monkeypatch):
+def test_the_catalog_offers_exactly_one_model(monkeypatch):
     from wayfinder.agent import AgentConfig
-    from wayfinder.models import catalog
+    from wayfinder.models import DEFAULT_MODEL, catalog
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-    entries = {m["spec"]: m for m in catalog()}
-    assert AgentConfig().model in entries, "the default must be selectable"
-    assert entries[AgentConfig().model]["available"] is True
-    # No Anthropic key set by the fixture, so direct Anthropic must show as
-    # unusable rather than silently failing minutes into a run.
-    assert entries["anthropic:claude-sonnet-5"]["available"] is False
-    assert entries["anthropic:claude-sonnet-5"]["key"] == "ANTHROPIC_API_KEY"
+    entries = catalog()
+    assert [m["spec"] for m in entries] == [DEFAULT_MODEL]
+    assert entries[0]["available"] is True
+    assert entries[0]["key"] == "OPENROUTER_API_KEY"
+    assert AgentConfig().model == DEFAULT_MODEL, "the dropdown must offer the default"
+
+
+def test_one_constant_defines_the_model_everywhere():
+    """Every default was its own string literal, and they drifted twice."""
+    from wayfinder.agent import AgentConfig
+    from wayfinder.evals.evaluators import JUDGE_MODEL
+    from wayfinder.extract import EXTRACT_MODEL
+    from wayfinder.models import DEFAULT_MODEL
+
+    assert AgentConfig().model == DEFAULT_MODEL
+    assert EXTRACT_MODEL == DEFAULT_MODEL
+    assert JUDGE_MODEL == DEFAULT_MODEL
+
+
+def test_no_experiment_arm_reaches_a_blocked_provider():
+    from wayfinder.evals.run import EXPERIMENT_MATRIX
+    from wayfinder.models import BLOCKED_PROVIDERS
+
+    for name, config in EXPERIMENT_MATRIX.items():
+        for spec in (config.model, config.subagent_model):
+            assert provider_of(spec) not in BLOCKED_PROVIDERS, f"arm {name}"
+
+
+def test_no_anthropic_key_is_needed_anywhere_in_the_repo():
+    """The tree should not ask for a key the project no longer uses."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    hits = []
+    for path in [*root.glob("*.example"), *(root / "wayfinder").rglob("*.py"),
+                 *(root / "wayfinder" / "web").glob("*.html")]:
+        text = path.read_text()
+        # models.py legitimately names it, to map and to block it.
+        if path.name == "models.py":
+            continue
+        if re.search(r"\bANTHROPIC_API_KEY\b", text):
+            hits.append(str(path.relative_to(root)))
+    assert not hits, f"still asking for an Anthropic key: {hits}"
 
 
 def test_defaults_endpoint_serves_the_catalog():

@@ -39,13 +39,20 @@ You need `OPENROUTER_API_KEY` and `TAVILY_API_KEY` to plan, plus
 `LANGSMITH_API_KEY` to run experiments. `WAYFINDER_USER_AGENT` is required by
 Nominatim's usage policy — set it to something that identifies you.
 `OPENAI_API_KEY` unlocks the spoken intake; without it the typed paths still
-work. `ANTHROPIC_API_KEY` is only needed if you pass `--model anthropic:…`.
+work.
 
-Models are named `provider:model`. `openrouter:` specs are routed through
-OpenRouter — the default planner is `openrouter:deepseek/deepseek-v4-flash` at
-$0.14/$0.28 per MTok, which is what makes sweeping the experiment matrix
-affordable. Everything else falls through to LangChain's own resolution, so
-`anthropic:claude-sonnet-5` still works unchanged.
+**One model, one bill.** Everything that runs — planner, subagents, transcript
+extractor, LLM judges — uses `openrouter:deepseek/deepseek-v4-flash`
+($0.14/$0.28 per MTok), defined once as `models.DEFAULT_MODEL`. That price is
+what makes sweeping the experiment matrix affordable rather than theoretical.
+
+Models are named `provider:model`, and `openrouter:` specs are built here;
+anything else falls through to LangChain. `anthropic:` is refused outright —
+not for lack of support, but because two separate stray literals (a server
+default and a hardcoded `<option>` in the UI) each quietly billed a second
+account after the provider had already moved. Routing the same models through
+OpenRouter — `openrouter:anthropic/claude-sonnet-5` — is fine and still bills
+the one balance.
 
 ## Use
 

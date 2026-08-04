@@ -110,7 +110,7 @@ def test_config_labels_are_distinct():
         AgentConfig(use_skills=False).label(),
         AgentConfig(use_subagents=False).label(),
         AgentConfig(single_researcher=True).label(),
-        AgentConfig(subagent_model="anthropic:claude-haiku-4-5").label(),
+        AgentConfig(subagent_model="openrouter:deepseek/deepseek-v4-pro").label(),
     }
     assert len(labels) == 6, "each experiment arm needs its own label"
 

@@ -9,6 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.2",
+    # Not used by this project — deepagents imports it at module scope, so
+    # `create_deep_agent` fails to import without it. Nothing here builds a
+    # ChatAnthropic (a test enforces that), and models.py refuses `anthropic:`
+    # specs outright, so its presence cannot route a call to Anthropic.
     "langchain-anthropic>=1.0",
     "langsmith>=0.4",
     "openevals>=0.1",

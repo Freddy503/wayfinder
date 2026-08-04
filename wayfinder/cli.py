@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from wayfinder.agent import AgentConfig, plan_trip
+from wayfinder.models import DEFAULT_MODEL
 from wayfinder.specs import load_itinerary_payload, load_spec
 from wayfinder.verify import ConstraintReport, check_payload
 
@@ -93,7 +94,7 @@ def plan(
     spec_path: Annotated[Path, typer.Argument(help="Trip spec YAML.")],
     model: Annotated[
         str, typer.Option(help="Main agent model, as provider:id.")
-    ] = "openrouter:deepseek/deepseek-v4-flash",
+    ] = DEFAULT_MODEL,
     subagent_model: Annotated[
         str | None, typer.Option(help="Model for subagents. Defaults to --model.")
     ] = None,
@@ -191,7 +192,7 @@ def serve(
     ] = "127.0.0.1",
     model: Annotated[
         str, typer.Option(help="Default model in the UI.")
-    ] = "openrouter:deepseek/deepseek-v4-flash",
+    ] = DEFAULT_MODEL,
 ) -> None:
     """Start the local web UI: live tool calls, approvals, and results.
 
