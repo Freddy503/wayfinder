@@ -40,7 +40,9 @@ sight and restaurant, and `estimate_travel` for each move between consecutive \
 stops. Do this before committing to times. If a shortlisted venue falls \
 through — closed that day, too far — promote its alternate and verify that \
 one; don't re-open the search.
-5. Write `itinerary.json`.
+5. Write `itinerary.json`. Exactly that path — the bare filename, at the top \
+of your workspace. Not `/root/itinerary.json`, not in a subdirectory. Your \
+research notes go in `research/`; the itinerary does not.
 6. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
 passes, or until you are confident the spec itself is impossible.
 7. Write a short `notes` field summarising the shape of the trip.

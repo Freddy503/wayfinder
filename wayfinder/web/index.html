@@ -44,7 +44,7 @@
      glance at. */
   main { display: flex; flex: 1; min-height: 0; }
   aside {
-    width: 360px; flex: none; border-right: 1px solid var(--border);
+    width: 400px; flex: none; border-right: 1px solid var(--border);
     background: var(--panel); overflow-y: auto; padding: 16px;
   }
   #rail {
@@ -554,6 +554,9 @@
       <h2>What I'm doing</h2>
       <div id="todos"><div class="empty">Working it out…</div></div>
     </div>
+
+    <!-- The finished plan lands here: checks, itinerary, sources. -->
+    <div id="result"></div>
   </aside>
 
   <section class="stage">
@@ -1123,11 +1126,32 @@ function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.c
 /* ---------------- human in the loop ---------------- */
 function renderInterrupt(actions) {
   const card = el("div", "hitl");
-  card.append(el("h3", null, "Your call"));
   actions.forEach((a, i) => {
-    card.append(el("div", "det", a.description || a.name));
+    // `finalize_itinerary` is the one gate a traveller actually meets, and it
+    // was showing them "Tool execution requires approval / Args: {...}" at the
+    // exact moment they were meant to be reading their trip. The tool's own
+    // description is written for a developer; the summary is written for them.
+    const finishing = a.name === "finalize_itinerary";
+    card.append(el("h3", null, finishing ? "Here's your trip" : "Your call"));
+    if (finishing) {
+      card.append(el("div", "det", a.args?.summary || ""));
+      card.append(el("div", "hint",
+        "Approve to save it, or send it back with what you'd like changed."));
+    } else {
+      card.append(el("div", "det", a.description || a.name));
+    }
+
+    // Kept for every gate — editing a call means editing its arguments — but
+    // out of the way for the one that is a plan rather than a function call.
     const pre = el("pre", null, JSON.stringify(a.args, null, 2));
-    card.append(pre);
+    if (finishing) {
+      const det = el("details", "raw");
+      det.append(el("summary", null, "What the agent submitted"));
+      det.append(pre);
+      card.append(det);
+    } else {
+      card.append(pre);
+    }
 
     const acts = el("div", "acts");
     const allowed = a.allowed && a.allowed.length ? a.allowed : ["approve", "reject"];
@@ -1173,7 +1197,12 @@ function renderInterrupt(actions) {
     card.append(acts);
     void i;
   });
-  feedAdd(card);
+  // Into the progress rail, not the raw feed — the feed now lives inside a
+  // collapsed <details>, which would have hidden the one card the run is
+  // actually blocked on.
+  progressHost().append(card);
+  openRail();
+  $("rail-body").scrollTop = $("rail-body").scrollHeight;
 }
 
 /* ---------------- verdict ----------------
@@ -1362,7 +1391,13 @@ function renderVerdict(d) {
     });
     card.append(links);
   }
-  feedAdd(card);
+  // The finished plan is the point of the whole run, so it goes in the trip
+  // panel on the left — not into the raw feed, which is collapsed by default
+  // and would have buried it entirely.
+  const host = $("result");
+  host.innerHTML = "";
+  host.append(card);
+  host.scrollIntoView({ behavior: "smooth", block: "start" });
   // The itinerary and sources panes need journeyData, which loads right after.
   window.__fillPanes = () => {
     panes.itinerary.innerHTML = ""; renderItineraryPane(panes.itinerary);

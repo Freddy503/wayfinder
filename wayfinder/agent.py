@@ -170,7 +170,7 @@ def make_check_tool(spec: TripSpec | LiveSpec, run_dir: Path, counter: dict[str,
                 ).strip()
             return fields
 
-        target = run_dir / path.lstrip("/")
+        target = locate_itinerary(run_dir, path)
         if not target.exists():
             return answer(
                 passed=False,
@@ -289,7 +289,7 @@ def make_finalize_tool(spec: TripSpec, run_dir: Path):
         Returns:
             `{"accepted", "passed", "summary", "violations"}`.
         """
-        target = run_dir / ITINERARY_FILE
+        target = locate_itinerary(run_dir)
         if not target.exists():
             return {
                 "accepted": False,
@@ -318,6 +318,32 @@ def make_finalize_tool(spec: TripSpec, run_dir: Path):
         }
 
     return finalize_itinerary
+
+
+def locate_itinerary(run_dir: Path, path: str = ITINERARY_FILE) -> Path:
+    """Find the itinerary wherever the agent actually put it.
+
+    The filesystem backend treats every path as virtual and anchored to the run
+    directory, so `/root/itinerary.json` — which some models write by habit,
+    reading "/" as a workspace root — lands at `run_dir/root/itinerary.json`
+    rather than where the checker looks. The plan is fine; only the path is
+    wrong, and reporting "the agent never wrote itinerary.json" over a complete
+    itinerary sitting one directory down is the worst kind of wrong answer.
+
+    Returns the expected location when nothing is found, so callers keep their
+    "it doesn't exist yet" branch and the error names the path we wanted.
+    """
+    expected = run_dir / path.lstrip("/")
+    if expected.exists():
+        return expected
+    name = Path(path).name
+    # Nearest first, and never out of `skills/` — those are copied in by us and
+    # would shadow a real answer.
+    found = sorted(
+        (p for p in run_dir.rglob(name) if "skills" not in p.parts),
+        key=lambda p: len(p.relative_to(run_dir).parts),
+    )
+    return found[0] if found else expected
 
 
 def stage_skills(run_dir: Path) -> None:
@@ -499,7 +525,7 @@ def finalise(
     on the same scale, instead of some runs producing a score and others
     producing an exception.
     """
-    path = run_dir / ITINERARY_FILE
+    path = locate_itinerary(run_dir)
     payload: Any | None = None
     itinerary: Itinerary | None = None
 

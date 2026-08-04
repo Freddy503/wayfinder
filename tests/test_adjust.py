@@ -358,3 +358,84 @@ def test_asking_always_interrupts(spec, tmp_path):
         agent_module.create_deep_agent = original
 
     assert captured["interrupt_on"].get("request_change") is True
+
+
+# --------------------------------------------------------------------------
+# Finding the itinerary wherever the model put it
+# --------------------------------------------------------------------------
+
+
+def test_the_expected_path_wins(tmp_path):
+    from wayfinder.agent import locate_itinerary
+
+    (tmp_path / "itinerary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "root").mkdir()
+    (tmp_path / "root" / "itinerary.json").write_text("{}", encoding="utf-8")
+    assert locate_itinerary(tmp_path) == tmp_path / "itinerary.json"
+
+
+def test_an_itinerary_one_directory_down_is_still_found(tmp_path):
+    """The backend anchors every path under the run directory, so a model that
+    writes `/root/itinerary.json` out of habit lands one level down. The plan
+    is fine; only the path is wrong, and reporting "never wrote itinerary.json"
+    over a complete itinerary is the worst kind of wrong answer."""
+    from wayfinder.agent import locate_itinerary
+
+    (tmp_path / "root").mkdir()
+    target = tmp_path / "root" / "itinerary.json"
+    target.write_text("{}", encoding="utf-8")
+    assert locate_itinerary(tmp_path) == target
+
+
+def test_the_shallowest_copy_wins(tmp_path):
+    from wayfinder.agent import locate_itinerary
+
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    (deep / "itinerary.json").write_text("{}", encoding="utf-8")
+    shallow = tmp_path / "root"
+    shallow.mkdir()
+    (shallow / "itinerary.json").write_text("{}", encoding="utf-8")
+    assert locate_itinerary(tmp_path) == shallow / "itinerary.json"
+
+
+def test_skills_never_shadow_a_real_itinerary(tmp_path):
+    """`skills/` is copied in by us; a fixture inside one is not the answer."""
+    from wayfinder.agent import locate_itinerary
+
+    skills = tmp_path / "skills" / "itinerary-format"
+    skills.mkdir(parents=True)
+    (skills / "itinerary.json").write_text("{}", encoding="utf-8")
+    assert not locate_itinerary(tmp_path).exists()
+
+
+def test_a_missing_itinerary_still_reports_the_path_we_wanted(tmp_path):
+    """Callers keep their "doesn't exist yet" branch, and the message names
+    the path the agent was told to write."""
+    from wayfinder.agent import ITINERARY_FILE, locate_itinerary
+
+    found = locate_itinerary(tmp_path)
+    assert found == tmp_path / ITINERARY_FILE
+    assert not found.exists()
+
+
+def test_the_checker_reads_a_misplaced_itinerary(tmp_path):
+    import json
+
+    from tests.conftest import item, make_itinerary, make_spec
+    from wayfinder.agent import make_check_tool
+
+    (tmp_path / "root").mkdir()
+    itinerary = make_itinerary([item("10:00", "12:00", "Belfry", cost=12.0)])
+    (tmp_path / "root" / "itinerary.json").write_text(
+        json.dumps(itinerary.model_dump(mode="json")), encoding="utf-8"
+    )
+    result = make_check_tool(make_spec(), tmp_path, {"calls": 0})()
+    assert result["metrics"]["schema_valid"] == 1.0
+
+
+def test_the_prompt_names_the_path_it_wants():
+    """Tolerance is the safety net; the prompt is the fix."""
+    from wayfinder.prompts import MAIN_PROMPT
+
+    assert "/root/itinerary.json" in MAIN_PROMPT, "name the mistake to prevent it"
