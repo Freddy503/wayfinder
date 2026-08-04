@@ -293,3 +293,30 @@ def test_every_batch_tool_documents_the_forms_it_accepts():
     ):
         for form in forms:
             assert form in (fn.__doc__ or ""), f"{fn.__name__} should mention {form!r}"
+
+
+# --------------------------------------------------------------------------
+# Prompt fixes for what live runs actually got wrong
+# --------------------------------------------------------------------------
+
+
+def test_the_prompt_says_transit_is_a_field_not_an_item():
+    """A run produced 14 hard `transit_feasible` violations by scheduling
+    `kind: "transit"` items between stops — which fills the very gap the walk
+    needed, so 15 minutes of travel had to fit into 0."""
+    from wayfinder.prompts import MAIN_PROMPT
+
+    assert "Transit is a field, not an item" in MAIN_PROMPT
+    assert "gap between" in MAIN_PROMPT
+    # The counter-example matters: `transit` is a legitimate kind for a canal
+    # cruise, so "never use it" would be wrong.
+    assert "canal cruise" in MAIN_PROMPT
+
+
+def test_the_prompt_forbids_scheduling_the_same_venue_twice():
+    """A passing Bruges plan put the same lunch and the same dinner on both
+    days. The checker flagged it softly; the agent shipped it anyway."""
+    from wayfinder.prompts import MAIN_PROMPT
+
+    assert "same place twice" in MAIN_PROMPT
+    assert "no_duplicates" in MAIN_PROMPT

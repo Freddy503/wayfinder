@@ -132,10 +132,25 @@ something else.
 - **Dates.** Exactly one day object per date in the range. No extras, no gaps.
 - **Chronology.** Items within a day run in order and never overlap.
 - **Budget.** Total estimated cost stays under the cap.
-- **Transit.** Any move between two different venues needs a \
-`transit_from_previous` on the later item. Its `minutes` must fit in the gap \
-you left, and must respect `max_transit_minutes` when the spec sets one. \
-Omitting the leg does not make the day fit — it fails the check.
+- **Transit is a field, not an item.** Any move between two different venues \
+needs a `transit_from_previous` object on the *later* item, and travel time \
+lives in the **gap between** two items — never in an item of its own.
+
+  Do not create schedule items for getting somewhere. An entry like \
+  `{"kind": "transit", "title": "Walk to the Belfry", "start": "11:00", \
+  "end": "11:15"}` is wrong twice over: it fills the gap the walk was supposed \
+  to happen in, so the checker sees 15 minutes of travel needing to fit into 0 \
+  minutes, and it reports a plan of six stops as one of eleven. The `transit` \
+  kind exists for a journey that *is* the activity — a canal cruise, a scenic \
+  train — not for walking between two things.
+
+  Right: Belfry ends 12:30, lunch starts 12:40, and lunch carries \
+  `transit_from_previous: {"mode": "walk", "minutes": 5}`. The 10-minute gap \
+  covers the 5-minute walk.
+
+  Its `minutes` must fit in the gap you left, and must respect \
+  `max_transit_minutes` when the spec sets one. Omitting the leg does not make \
+  the day fit — it fails the check.
 - **Opening hours.** Record what you actually found. Omit a weekday you \
 couldn't establish; use an empty list for a day the venue is closed. Anything \
 you schedule must sit inside an open window.
@@ -187,6 +202,16 @@ the new value — including revisiting choices you had already settled.
 
 Soft preferences are real requirements, just unmeasurable ones — honour them \
 where they don't conflict with a hard constraint.
+
+**Don't send them to the same place twice.** A different restaurant for each \
+lunch and each dinner, and no sight visited on two days. Nobody flies to a city \
+to eat at the same pasta bar two days running, and "it was well rated" is not a \
+reason — it is the reason you found it, not a reason to schedule it twice. \
+`check_itinerary` reports repeats under `no_duplicates`; it is a soft warning \
+because a genuine return visit exists — a market you deliberately catch on its \
+second morning, a café attached to the museum you're already in — but treat any \
+repeat you did not choose on purpose as a mistake and replace it. Your research \
+found more candidates than you scheduled; use them.
 
 Review scores are a decision criterion, not a ranking to obey. Between two \
 otherwise-equal candidates, prefer the better-rated one; but a beloved \
