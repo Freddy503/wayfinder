@@ -533,3 +533,41 @@ def test_a_change_request_alongside_a_real_approval_yields_both():
     )
     assert [e.type for e in events] == ["change.requested", "interrupt"]
     assert [a["name"] for a in events[1].data["actions"]] == ["finalize_itinerary"]
+
+
+def test_active_runs_are_listed_so_a_reloaded_page_can_rejoin():
+    """A run outlives the tab watching it. Without this the only way back was
+    to wait and dig through `runs/`."""
+    from fastapi.testclient import TestClient
+
+    app = create_app()
+    client = TestClient(app)
+    assert client.get("/api/active").json() == []
+
+
+def test_adjusting_an_unknown_run_is_a_404():
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app())
+    res = client.post("/api/adjust/nope", json={"changes": {"budget": 500}})
+    assert res.status_code == 404
+
+
+def test_an_impossible_change_is_refused_with_a_readable_reason():
+    """The message goes straight to the panel under the constraint list, so it
+    has to read as a sentence rather than a pydantic dump."""
+    from wayfinder.server import AdjustRequest, PlanRequest, RunSession
+
+    session = RunSession(
+        PlanRequest(
+            spec={
+                "destination": "Lisbon, Portugal",
+                "dates": {"start": "2026-10-12", "end": "2026-10-14"},
+                "budget": {"currency": "EUR", "total": 900},
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc:      # HTTPException
+        session.adjust(AdjustRequest(changes={"budget": -1}))
+    assert "greater than zero" in str(exc.value.detail)
+    assert session.live.current.budget.total == 900

@@ -412,6 +412,26 @@ def create_app() -> FastAPI:
             "history": session.live.history,
         }
 
+    @app.get("/api/active")
+    def active() -> list[dict[str, Any]]:
+        """Runs still going, so a reloaded page can rejoin one.
+
+        A planning run outlives the tab watching it — the worker thread keeps
+        going, artifacts keep landing on disk — but until this existed, closing
+        or refreshing the page meant losing sight of it entirely, with no way
+        back short of waiting and digging through `runs/`.
+        """
+        return [
+            {
+                "run_id": session.id,
+                "destination": session.live.current.destination,
+                "status": session.status,
+                "waiting": session.status == "waiting",
+            }
+            for session in runs.values()
+            if session.status in {"starting", "running", "waiting"}
+        ]
+
     @app.get("/api/runs/{run_id}")
     def run_status(run_id: str) -> dict[str, Any]:
         session = runs.get(run_id)

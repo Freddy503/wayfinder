@@ -1798,6 +1798,13 @@ function trimProgress(host) {
   for (let i = 0; i < steps.length - 40; i++) steps[i].remove();
 }
 
+/* First sentence, trimmed. Enough to say what a subagent is doing without
+   replaying the spec at you. */
+function briefly(text, limit = 90) {
+  const first = String(text).split(/(?<=[.!?])\s|\n/)[0].trim();
+  return first.length > limit ? first.slice(0, limit).trimEnd() + "…" : first;
+}
+
 function workCard(d) {
   const card = el("div", "work busy");
   const head = el("div", "wh");
@@ -1805,7 +1812,10 @@ function workCard(d) {
   head.append(el("div", "wn", d.role || d.subagent || "Research"));
   head.append(el("div", "ws", "working…"));
   card.append(head);
-  if (d.task) card.append(el("div", "wt", d.task));
+  // The dispatch prompt is written for the subagent, not for you — it restates
+  // the whole spec back at itself. One clause is enough to say what it's off
+  // doing; the full text is in the raw feed.
+  if (d.task) card.append(el("div", "wt", briefly(d.task)));
   progressHost().append(card);
   works.set(d.id, card);
   $("rail-body").scrollTop = $("rail-body").scrollHeight;
@@ -2114,6 +2124,30 @@ async function start() {
 }
 $("go").onclick = start;
 
+/* Rejoin a run that outlived its tab. The queue is drained destructively, so
+   what happened before the reload is gone — but the plan, the map and the
+   constraints all still land, which beats staring at an idle page while the
+   agent works. */
+function attach(run) {
+  runId = run.run_id;
+  document.body.classList.add("planning");
+  $("trip-dest").textContent = run.destination;
+  $("trip-when").textContent = "already planning — rejoined";
+  $("progress").innerHTML = ""; works.clear();
+  $("rawwrap").style.display = "";
+  openRail();
+  setStatus(run.status, "running"); setRailStatus(run.status, "running");
+  stepRow("Rejoined a trip already being planned");
+  $("go").disabled = true;
+
+  fetch(`/api/constraints/${runId}`).then(r => r.json())
+    .then(b => renderConstraints(b.constraints || [])).catch(() => {});
+
+  source = new EventSource(`/api/stream/${runId}`);
+  source.onmessage = e => { const d = JSON.parse(e.data); (HANDLERS[d.type] || (() => {}))(d); };
+  source.onerror = () => { setStatus("disconnected", "error"); source.close(); $("go").disabled = false; };
+}
+
 $("trip-new").onclick = () => {
   // Back to intake. The run keeps streaming into the rail if it's still going —
   // stopping it isn't what "plan a different trip" asks for, and the results
@@ -2190,6 +2224,13 @@ $("trip-new").onclick = () => {
       loadJourney();
     };
   } catch (e) { console.warn("history unavailable:", e); }
+
+  // Rejoin whatever is still running before offering a fresh form — a page
+  // that says "idle" while a trip is being planned is simply wrong.
+  try {
+    const live = await (await fetch("/api/active")).json();
+    if (live.length) attach(live[live.length - 1]);
+  } catch (e) { console.warn("could not check for live runs:", e); }
 
   const today = new Date(Date.now() + 60 * 864e5).toISOString().slice(0, 10);
   const later = new Date(Date.now() + 63 * 864e5).toISOString().slice(0, 10);
