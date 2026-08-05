@@ -21,7 +21,7 @@ from langsmith import Client
 
 from wayfinder.agent import AgentConfig, new_run_dir, plan_trip
 from wayfinder.evals.datasets import DEFAULT_DATASET_NAME, load_cases
-from wayfinder.evals.evaluators import build_evaluators
+from wayfinder.evals.evaluators import SUMMARY_EVALUATORS, build_evaluators
 from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import TripSpec
 
@@ -126,6 +126,30 @@ def select_examples(client: Client, dataset_name: str, names: list[str]) -> list
     return examples
 
 
+def select_split(client: Client, dataset_name: str, split: str) -> list[Any]:
+    """Every example in one split.
+
+    Splits are the dataset's own categories — easy, tight-budget,
+    constraint-dense, infeasible and so on. They behave differently enough
+    that one average over all twenty hides more than it shows: an arm can gain
+    on the easy cases and lose on the infeasible ones and look unchanged.
+    """
+    examples = [
+        e
+        for e in client.list_examples(dataset_name=dataset_name)
+        if split in ((e.metadata or {}).get("dataset_split") or [])
+    ]
+    if not examples:
+        known = sorted({
+            s
+            for e in client.list_examples(dataset_name=dataset_name)
+            for s in ((e.metadata or {}).get("dataset_split") or [])
+        })
+        msg = f"no split {split!r} in {dataset_name!r}. Known: {known}"
+        raise KeyError(msg)
+    return examples
+
+
 def run_experiment(
     config: AgentConfig,
     *,
@@ -135,17 +159,25 @@ def run_experiment(
     use_judges: bool = True,
     max_concurrency: int = 4,
     cases: list[str] | None = None,
+    split: str | None = None,
     client: Client | None = None,
     runs_root: Path | None = None,
 ) -> Any:
     client = client or Client()
-    data: Any = (
-        select_examples(client, dataset_name, cases) if cases else dataset_name
-    )
+    if cases:
+        data: Any = select_examples(client, dataset_name, cases)
+    elif split:
+        data = select_split(client, dataset_name, split)
+    else:
+        data = dataset_name
     return client.evaluate(
         make_target(config, runs_root=runs_root),
         data=data,
         evaluators=build_evaluators(use_judges=use_judges),
+        # Run once over the whole experiment. An average is the wrong summary
+        # for "did anything crash", and the right one for "how did we do on the
+        # cases that should have been refused" — but only over that subset.
+        summary_evaluators=SUMMARY_EVALUATORS,
         experiment_prefix=experiment_prefix,
         num_repetitions=repetitions,
         max_concurrency=max_concurrency,
@@ -153,6 +185,7 @@ def run_experiment(
             "wayfinder_config": config.label(),
             "judges": use_judges,
             "cases": ",".join(cases) if cases else "all",
+            "split": split or "all",
             **_config_metadata(config),
         },
     )

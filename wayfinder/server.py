@@ -368,6 +368,16 @@ class RunSession:
             result.trace_id = trace_id
             self.result["scores"] = record(trace_id, result)
             self.result["trace_id"] = str(trace_id) if trace_id else None
+
+            # Anything that failed, refused, or scraped through with warnings
+            # goes to a human. A clean pass is the one case where the code
+            # already knows the answer, and queueing those buries the rest.
+            from wayfinder.evals.review import send_for_review, worth_reviewing
+
+            queue_it, why = worth_reviewing(result)
+            self.result["review"] = (
+                {"queued": send_for_review(trace_id), "why": why} if queue_it else None
+            )
             self._emit(Event("run.finished", self.result))
         except Exception as exc:  # noqa: BLE001
             self._emit(Event("run.error", {"message": f"scoring failed: {exc}"}))

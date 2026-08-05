@@ -148,7 +148,59 @@ def plan(
         if result.trace_id:
             console.print(f"[dim]sent to LangSmith as feedback on run[/] {result.trace_id}")
 
+    from wayfinder.evals.review import send_for_review, worth_reviewing
+
+    queue_it, why = worth_reviewing(result)
+    if queue_it and send_for_review(result.trace_id):
+        console.print(f"[dim]queued for review:[/] {why}")
+
     raise typer.Exit(0 if result.report.passed else 1)
+
+
+@app.command()
+def splits() -> None:
+    """Show the dataset's splits and what is in each.
+
+    Splits are the categories — easy, tight-budget, infeasible and so on. They
+    behave differently enough that one average over all twenty hides more than
+    it shows, so `eval --split` runs one at a time.
+    """
+    _load_env()
+    from wayfinder.evals.datasets import splits as dataset_splits
+
+    from rich.table import Table
+
+    table = Table(title="wayfinder-trips · splits")
+    table.add_column("split")
+    table.add_column("n", justify="right")
+    table.add_column("cases")
+    for name, cases in sorted(dataset_splits().items()):
+        table.add_row(name, str(len(cases)), ", ".join(cases))
+    console.print(table)
+    console.print("\n[dim]uv run wayfinder eval --arm baseline --split infeasible[/]")
+
+
+@app.command()
+def review(
+    queue: Annotated[str, typer.Option(help="Annotation queue name.")] = "wayfinder-review",
+) -> None:
+    """Create the review queue and say where to find it.
+
+    Runs that fail, refuse, or pass with warnings are queued automatically —
+    a clean pass is the one case where the code already knows the answer, and
+    queueing those buries the ones that need a person.
+    """
+    _load_env()
+    from wayfinder.evals.review import RUBRIC, ensure_queue, is_configured
+
+    if not is_configured():
+        console.print("[red]LANGSMITH_API_KEY is not set[/] — nothing to review against.")
+        raise typer.Exit(2)
+
+    queue_id = ensure_queue(queue)
+    console.print(f"[bold]{queue}[/] [dim]{queue_id}[/]")
+    console.print("\n[dim]smith.langchain.com → Annotation Queues[/]")
+    console.print(f"\n[dim]{RUBRIC.strip()}[/]")
 
 
 @app.command()
@@ -252,6 +304,10 @@ def eval_command(
         list[str] | None,
         typer.Option("--case", help="Repeat to run only these cases. Default: all 20."),
     ] = None,
+    split: Annotated[
+        str | None,
+        typer.Option("--split", help="Run one split: easy, infeasible, … (see `splits`)."),
+    ] = None,
 ) -> None:
     """Run one experiment arm over the dataset and report it to LangSmith."""
     _load_env()
@@ -264,21 +320,39 @@ def eval_command(
     config = EXPERIMENT_MATRIX[arm]
     _preflight(config.model, needs_langsmith=True)
 
-    runs = (len(case) if case else 20) * repetitions
-    scope = f"{len(case)} case(s)" if case else "all 20 cases"
+    if case and split:
+        console.print("[red]Pass --case or --split, not both.[/]")
+        raise typer.Exit(2)
+
+    if case:
+        count, scope = len(case), f"{len(case)} case(s)"
+    elif split:
+        from wayfinder.evals.datasets import splits as dataset_splits
+
+        known = dataset_splits()
+        if split not in known:
+            console.print(
+                f"[red]Unknown split[/] {split!r}. Known: {', '.join(sorted(known))}"
+            )
+            raise typer.Exit(2)
+        count, scope = len(known[split]), f"split {split!r} ({len(known[split])} cases)"
+    else:
+        count, scope = 20, "all 20 cases"
+
     console.print(
         f"[bold]{arm}[/] · {config.label()} · {scope} × {repetitions} = "
-        f"[bold]{runs} agentic run(s)[/]{'' if judges else ' · no judges'}"
+        f"[bold]{count * repetitions} agentic run(s)[/]{'' if judges else ' · no judges'}"
     )
 
     results = run_experiment(
         config,
-        experiment_prefix=arm,
+        experiment_prefix=f"{arm}-{split}" if split else arm,
         dataset_name=dataset,
         repetitions=repetitions,
         use_judges=judges,
         max_concurrency=concurrency,
         cases=case,
+        split=split,
     )
     console.print(results)
 

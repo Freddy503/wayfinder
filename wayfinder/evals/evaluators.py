@@ -288,3 +288,67 @@ def build_judges(model: str = JUDGE_MODEL) -> list[Callable[..., Any]]:
 
 def build_evaluators(use_judges: bool = True, judge_model: str = JUDGE_MODEL):
     return [*CODE_EVALUATORS, *(build_judges(judge_model) if use_judges else [])]
+
+
+# --------------------------------------------------------------------------
+# Summary evaluators — one score for the whole experiment
+#
+# Per-case scores are averaged in the UI, and an average is exactly the wrong
+# summary for some questions. "Did anything crash?" is not a mean. "How did we
+# do on the cases that were meant to be refused?" is a mean over a *subset*.
+# These run once per experiment, over every run in it.
+# --------------------------------------------------------------------------
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def crash_free_rate(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+    """Fraction of cases that produced a validated itinerary at all.
+
+    Separated from `plan_passes` because the two failure modes want different
+    responses: a plan that broke a constraint is a modelling problem, a run
+    that crashed is an engineering one, and averaging them together tells you
+    to fix the wrong thing.
+    """
+    return {
+        "key": "crash_free_rate",
+        "score": _mean([1.0 if produced_output(o) else 0.0 for o in outputs or []]),
+    }
+
+
+def refusal_accuracy(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+    """`correctly_refused`, but only over the cases that should be refused.
+
+    The per-case version is scored on all twenty so an agent that refuses
+    everything can't top the infeasible subset. That makes it a blended number.
+    This one answers the narrower question directly: of the specs that cannot
+    be satisfied, how many did it actually turn down?
+    """
+    scored = [
+        1.0 if _metrics(o).get("refused", 0.0) == 1.0 and produced_output(o) else 0.0
+        for o, r in zip(outputs or [], reference_outputs or [], strict=False)
+        if (r or {}).get("should_refuse")
+    ]
+    if not scored:
+        return {"key": "refusal_accuracy", "score": None,
+                "comment": "no infeasible cases in this run"}
+    return {"key": "refusal_accuracy", "score": _mean(scored)}
+
+
+def median_verification_calls(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+    """Median rather than mean: one runaway case would otherwise set the number.
+
+    This is the column the batch tools were built to move, so it wants to
+    reflect the typical run and not the worst one.
+    """
+    values = sorted(float((o or {}).get("verification_calls", 0)) for o in outputs or [])
+    if not values:
+        return {"key": "median_verification_calls", "score": 0.0}
+    mid = len(values) // 2
+    median = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+    return {"key": "median_verification_calls", "score": median}
+
+
+SUMMARY_EVALUATORS = [crash_free_rate, refusal_accuracy, median_verification_calls]

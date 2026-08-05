@@ -107,9 +107,29 @@ def sync_dataset(
             {
                 "inputs": case.inputs(),
                 "outputs": case.reference(),
+                # The category is also a LangSmith *split*, not just a label.
+                # Splits are filterable in the UI and selectable when running
+                # an experiment, so "how does this arm do on the infeasible
+                # cases" becomes a question you can ask directly — and those
+                # subsets behave so differently that one average over all
+                # twenty hides more than it shows.
+                #
+                # `split` is a first-class field, not a metadata key. Writing
+                # `metadata["dataset_split"]` — which is what the API *reads
+                # back* — is silently ignored on create, and every example
+                # stays in "base".
+                "split": [case.category],
                 "metadata": {"category": case.category, "name": case.name},
             }
             for case in cases
         ],
     )
     return dataset_name
+
+
+def splits(path: Path | None = None) -> dict[str, list[str]]:
+    """Case names grouped by split, for `--split` and for the console."""
+    grouped: dict[str, list[str]] = {}
+    for case in load_cases(path):
+        grouped.setdefault(case.category, []).append(case.name)
+    return grouped
