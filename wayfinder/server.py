@@ -66,6 +66,9 @@ RESEARCH_TITLES = {
     "food": "Places to eat",
     "logistics": "Getting around",
     "flights": "Flights",
+    # Not research, but it lands in the same directory and is genuinely the
+    # first useful thing on screen — the agent's plan of attack, at ~15s.
+    "todos": "The plan",
 }
 RESEARCH_ICONS = {
     "neighborhoods": "🗺",
@@ -73,6 +76,7 @@ RESEARCH_ICONS = {
     "food": "🍽",
     "logistics": "🚊",
     "flights": "✈",
+    "todos": "📋",
 }
 
 
