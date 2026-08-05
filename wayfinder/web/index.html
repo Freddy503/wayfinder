@@ -44,14 +44,16 @@
      glance at. */
   main { display: flex; flex: 1; min-height: 0; }
   aside {
-    width: 400px; flex: none; border-right: 1px solid var(--border);
+    width: var(--aside-w, 400px); flex: none; border-right: 1px solid var(--border);
     background: var(--panel); overflow-y: auto; padding: 16px;
   }
   #rail {
-    width: 380px; flex: none; border-left: 1px solid var(--border); border-right: none;
+    width: var(--rail-w, 380px); flex: none;
+    border-left: 1px solid var(--border); border-right: none;
     background: var(--panel); display: flex; flex-direction: column;
     overflow: hidden; padding: 0; transition: width .18s ease;
   }
+  body.dragging #rail { transition: none; }
   #rail.shut { width: 0; border-left-width: 0; }
   #rail-head {
     display: flex; align-items: center; gap: 8px; padding: 12px 14px;
@@ -360,13 +362,116 @@
   .banner { padding: 8px 12px; border-radius: 8px; font-size: 12.5px; margin: 8px 0;
             border: 1px solid #234634; background: #0f2418; color: var(--ok); }
 
+  /* ---- draggable splitters ----
+     Three of them: the two sidebars and the map/notes divide. Everything is
+     driven by a CSS variable so a drag is one custom-property write rather
+     than a layout walk, and the sizes persist. */
+  .split { flex: none; background: transparent; position: relative; z-index: 450; }
+  .split::after { content: ""; position: absolute; inset: 0; background: var(--border);
+                  opacity: 0; transition: opacity .15s; }
+  .split:hover::after, .split.dragging::after { opacity: 1; }
+  .split.v { width: 5px; cursor: col-resize; margin: 0 -2px; }
+  .split.h { height: 5px; cursor: row-resize; margin: -2px 0; }
+  body.dragging { cursor: col-resize; user-select: none; }
+  body.dragging.row { cursor: row-resize; }
+
+  /* ---- full-screen voice intake ----
+     Talking to something is a different mode from filling in a form, and the
+     UI should say so. The sidebar version worked but felt like dictating into
+     a text box; this takes the screen, puts one thing in the middle, and
+     reacts to your voice so it is obvious it is listening. */
+  #stage-voice {
+    position: fixed; inset: 0; z-index: 900; display: none;
+    background: radial-gradient(120% 90% at 50% 0%, #16202c 0%, var(--bg) 55%);
+    flex-direction: column; align-items: center;
+  }
+  #stage-voice.on { display: flex; animation: vfade .28s ease; }
+  @keyframes vfade { from { opacity: 0; transform: scale(.99); } to { opacity: 1; } }
+
+  .vtop { display: flex; align-items: center; gap: 12px; width: 100%;
+          padding: 16px 22px; flex: none; }
+  .vtop .vwho { font-size: 13px; color: var(--faint); }
+  .vmid { flex: 1; display: flex; min-height: 0; width: 100%;
+          max-width: 1180px; gap: 28px; padding: 0 24px 12px; }
+  .vleft { flex: 1; display: flex; flex-direction: column; align-items: center;
+           justify-content: center; min-width: 0; gap: 24px; }
+  .vright { width: 320px; flex: none; overflow-y: auto; padding-top: 8px; }
+
+  /* The orb. Its scale follows the live audio level, so the page reacts while
+     you speak rather than sitting still until a transcript lands seconds
+     later — that lag is what made the old version feel dead. */
+  .orb { position: relative; width: 190px; height: 190px; flex: none; }
+  .orb .ring {
+    position: absolute; inset: 0; border-radius: 50%; border: 1px solid #2b3a4d;
+    transform: scale(calc(1 + var(--level, 0) * 0.55));
+    transition: transform .09s ease-out;
+  }
+  .orb .ring.r2 { inset: 14px; opacity: .6;
+                  transform: scale(calc(1 + var(--level, 0) * 0.34)); }
+  .orb .core {
+    position: absolute; inset: 34px; border-radius: 50%;
+    background: radial-gradient(circle at 34% 30%, #6ee7a0, #2c8f63 62%, #17452f);
+    box-shadow: 0 0 calc(24px + var(--level, 0) * 70px) rgba(110,231,160,.45);
+    transform: scale(calc(1 + var(--level, 0) * 0.13));
+    transition: transform .09s ease-out, box-shadow .12s ease-out;
+  }
+  /* Blue while the interviewer speaks, so who has the floor is obvious
+     without reading anything. */
+  .orb.agent .core { background: radial-gradient(circle at 34% 30%, #93c5fd, #3b82f6 62%, #1e3a8a);
+                     box-shadow: 0 0 calc(24px + var(--level, 0) * 70px) rgba(96,165,250,.45); }
+  .orb.agent .ring { border-color: #33507d; }
+  .orb.idle .core { background: radial-gradient(circle at 34% 30%, #46506a, #2a3145 70%);
+                    box-shadow: none; }
+
+  .vstate { font-size: 15px; color: var(--dim); text-align: center; min-height: 22px; }
+  .vstate b { color: var(--text); }
+
+  /* The last few turns, newest at the bottom. Capped — a glance to confirm it
+     heard you, not a transcript to read. */
+  .vlog { width: 100%; max-width: 620px; display: flex; flex-direction: column;
+          gap: 8px; max-height: 32vh; overflow-y: auto; }
+  .vturn { padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5;
+           max-width: 86%; animation: vturn .22s ease; }
+  @keyframes vturn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+  .vturn.agent { background: #1b2738; border: 1px solid #2b3a4d; align-self: flex-start;
+                 border-bottom-left-radius: 5px; }
+  .vturn.you { background: #17301f; border: 1px solid #235238; align-self: flex-end;
+               color: #d6f5e3; border-bottom-right-radius: 5px; }
+
+  .vbottom { flex: none; padding: 0 24px 26px; display: flex; gap: 10px; align-items: center; }
+  .vbottom button { padding: 11px 22px; font-size: 14px; border-radius: 26px; }
+
+  .vcheck { display: flex; gap: 9px; padding: 7px 0; font-size: 13px; align-items: baseline; }
+  .vcheck .mk { width: 16px; flex: none; text-align: center; }
+  .vcheck.on .mk { color: var(--ok); }
+  .vcheck.off { color: var(--faint); }
+  .vcheck .lb { color: var(--dim); }
+  .vcheck.on .lb { color: var(--text); }
+  .vcheck .vv { color: var(--dim); font-size: 12.5px; }
+
+  @media (max-width: 900px) {
+    .vright { display: none; }
+    .orb { width: 140px; height: 140px; }
+  }
+
+  /* Nothing to resize until there are notes to resize. */
+  #split-notes { display: none; }
+  body.has-notes #split-notes { display: block; }
+  .split:focus-visible::after { opacity: 1; background: var(--accent); }
+
   /* ---- research notes, under the map ----
      A long run spends most of its time after the researchers have finished.
      Their notes were on disk the whole time with nowhere to be read. */
   #notes { flex: none; display: none; border-top: 1px solid var(--border);
-           background: var(--panel); max-height: 44vh; overflow: hidden;
-           flex-direction: column; }
+           background: var(--panel); height: var(--notes-h, 40vh); overflow: hidden;
+           flex-direction: column; transition: height .35s ease; }
   #notes.on { display: flex; }
+  /* Once the plan exists, the map is the thing worth looking at and the notes
+     become reference material. They keep their tabs and scroll. */
+  body.done #notes { height: var(--notes-done-h, 22vh); }
+  /* No transition mid-drag, or the pane lags the pointer by a third of a
+     second and the whole thing feels broken. */
+  body.dragging #notes { transition: none; }
   .notetabs { display: flex; gap: 6px; padding: 10px 16px 0; flex-wrap: wrap;
               align-items: center; flex: none; }
   .notetab { padding: 5px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;
@@ -600,6 +705,9 @@
     <div id="result"></div>
   </aside>
 
+  <div class="split v" id="split-left" role="separator" aria-orientation="vertical"
+       aria-label="Resize the trip panel" tabindex="0"></div>
+
   <section class="stage">
     <div id="map" role="region" aria-label="Route map"></div>
     <div id="map-empty">Tell me about your trip and the map fills in as I find places.</div>
@@ -612,11 +720,16 @@
     <!-- The researchers' notes, under the map, from the moment they land.
          On a long run these exist for most of the wait and had nowhere to be
          seen. -->
+    <div class="split h" id="split-notes" role="separator" aria-orientation="horizontal"
+         aria-label="Resize the research panel" tabindex="0"></div>
     <div id="notes" role="region" aria-label="Research notes">
       <div class="notetabs" id="notetabs"></div>
       <div class="notebody" id="notebody"></div>
     </div>
   </section>
+
+  <div class="split v" id="split-right" role="separator" aria-orientation="vertical"
+       aria-label="Resize the progress panel" tabindex="0"></div>
 
   <aside id="rail" aria-label="Planning progress">
     <div id="rail-head">
@@ -640,6 +753,37 @@
     </div>
   </aside>
 </main>
+
+<!-- Full-screen voice intake. Outside <main> so it covers the whole app, and
+     so the layout underneath keeps its state while you talk. -->
+<section id="stage-voice" aria-label="Voice intake" aria-modal="true" role="dialog">
+  <div class="vtop">
+    <strong style="font-size:14px">Planning by voice</strong>
+    <span class="vwho" id="v-model"></span>
+    <div class="spacer"></div>
+    <button class="sm" id="v-close" title="Back to the form (Esc)">Use the form instead</button>
+  </div>
+
+  <div class="vmid">
+    <div class="vleft">
+      <div class="orb idle" id="v-orb">
+        <div class="ring"></div><div class="ring r2"></div><div class="core"></div>
+      </div>
+      <div class="vstate" id="v-state">Tap start and just talk — I'll ask what I still need.</div>
+      <div class="vlog" id="v-log"></div>
+    </div>
+    <div class="vright">
+      <h2>What I have so far</h2>
+      <div id="v-checklist"></div>
+    </div>
+  </div>
+
+  <div class="vbottom">
+    <button class="primary" id="v-start">☎ Start conversation</button>
+    <button id="v-stop" style="display:none">Hang up</button>
+    <button class="primary" id="v-plan" disabled>Plan this trip</button>
+  </div>
+</section>
 
 <!-- Sibling of <main>, not a child of it: print hides the whole app shell,
      and a hidden ancestor would take this with it however it's styled. -->
@@ -1001,7 +1145,7 @@ let voiceTopics = [], voiceCovered = new Set(), voiceFields = {};
 // the reassurance that it won't stop halfway.
 fetch("/api/realtime/topics").then(r => r.json()).then(data => {
   voiceTopics = data.topics || [];
-  renderVoiceBoard();
+  renderVoiceBoard(); renderVoiceChecklist();
 }).catch(() => { /* board falls back to the dictation view */ });
 
 function resetVoiceIntake() {
@@ -1015,6 +1159,7 @@ function renderVoiceBoard() {
   if (!(voiceFields.start && voiceFields.end)) missing.push("dates");
   if (voiceFields.budget === undefined) missing.push("budget");
 
+  renderVoiceChecklist();
   renderBoard({}, missing, voiceTopics.map(({ id, label }) => ({
     label,
     value: String((TOPIC_VALUE[id] || (() => ""))(voiceFields) || ""),
@@ -1041,12 +1186,18 @@ function applyVoiceFields(args) {
   if (fields.origin !== undefined) $("f-origin").value = fields.origin;
 
   const { missing, left } = renderVoiceBoard();
-  if (missing.length) return;
+  $("v-plan").disabled = missing.length > 0;
+  if (missing.length) {
+    setVoiceState(`still need: ${missing.join(", ")}`);
+    return;
+  }
   // Enough to plan, but say whether it's still working through the checklist —
   // otherwise the traveller hangs up mid-interview thinking it's done.
-  $("followup").textContent = ready ? "✓ Got everything — hit Plan trip."
+  const note = ready ? "✓ Got everything — hit Plan this trip."
     : left.length ? `Plannable now. Still asking about: ${left.map(t => t.label.toLowerCase()).join(", ")}.`
-    : "✓ Enough to plan — hit Plan trip when you're ready.";
+    : "✓ Enough to plan — hit Plan this trip when you're ready.";
+  $("followup").textContent = note;
+  setVoiceState(note);
 }
 
 function wireDataChannel(channel) {
@@ -1056,10 +1207,15 @@ function wireDataChannel(channel) {
 
     // The model finished asking something — show it so the conversation is
     // followable without audio.
-    if (msg.type === "response.output_audio_transcript.done" && msg.transcript)
-      voiceLog("agent", msg.transcript);
-    if (msg.type === "conversation.item.input_audio_transcription.completed" && msg.transcript)
-      voiceLog("you", msg.transcript);
+    if (msg.type === "response.output_audio_transcript.done" && msg.transcript) {
+      voiceLog("agent", msg.transcript); voiceTurn("agent", msg.transcript);
+    }
+    if (msg.type === "conversation.item.input_audio_transcription.completed" && msg.transcript) {
+      voiceLog("you", msg.transcript); voiceTurn("you", msg.transcript);
+    }
+    // Turn-taking, straight from the API rather than inferred from levels.
+    if (msg.type === "input_audio_buffer.speech_started") setVoiceState("listening…");
+    if (msg.type === "response.created") setVoiceState("thinking…");
 
     if (msg.type === "response.function_call_arguments.done") {
       let args = {};
@@ -1080,34 +1236,40 @@ function wireDataChannel(channel) {
 }
 
 async function startVoice() {
-  $("voice-state").textContent = "connecting…";
+  if (talking) return;
+  setVoiceState("connecting…");
   let token;
   try {
     const res = await fetch("/api/realtime/token", { method: "POST" });
     token = await res.json();
   } catch (e) {
-    $("voice-state").textContent = "could not reach the server: " + e; return;
+    setVoiceState("could not reach the server: " + e); return;
   }
   resetVoiceIntake();                      // a new conversation, not a resumed one
   if (!token.ok) {
-    $("voice-state").textContent = token.reason +
-      " — set OPENAI_API_KEY in .env, or use dictation below.";
+    setVoiceState(token.reason + " — set OPENAI_API_KEY in .env, or type instead.");
     return;
   }
+  $("v-model").textContent = token.model || "";
 
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    $("voice-state").textContent =
-      "microphone blocked — allow it, or use dictation below.";
+    setVoiceState("microphone blocked — allow it, or type instead.");
     return;
   }
 
   pc = new RTCPeerConnection();
   const audio = new Audio();
   audio.autoplay = true;
-  pc.ontrack = ev => { audio.srcObject = ev.streams[0]; };
+  pc.ontrack = ev => {
+    audio.srcObject = ev.streams[0];
+    // Metering the interviewer's own audio is what lets the orb change colour
+    // when it takes the floor.
+    meterFor(ev.streams[0], "agent");
+  };
   micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+  meterFor(micStream, "you");
 
   dc = pc.createDataChannel("oai-events");
   wireDataChannel(dc);
@@ -1122,15 +1284,16 @@ async function startVoice() {
                "Content-Type": "application/sdp" },
   });
   if (!answer.ok) {
-    $("voice-state").textContent = `OpenAI refused the call (${answer.status})`;
+    setVoiceState(`OpenAI refused the call (${answer.status})`);
     stopVoice(); return;
   }
   await pc.setRemoteDescription({ type: "answer", sdp: await answer.text() });
 
   talking = true;
-  $("voice").textContent = "⏹ End conversation";
+  setVoiceButtons(true);
   $("voice").classList.remove("primary");
-  $("voice-state").textContent = `listening · ${token.model}`;
+  setVoiceState("listening — go ahead");
+  startMetering();
 }
 
 function stopVoice() {
@@ -1138,13 +1301,122 @@ function stopVoice() {
   dc?.close(); pc?.close();
   micStream?.getTracks().forEach(t => t.stop());
   dc = pc = micStream = null;
-  $("voice").textContent = "☎ Start conversation";
+  stopMetering();
+  setVoiceButtons(false);
   $("voice").classList.add("primary");
-  if (!$("voice-state").textContent.startsWith("error"))
-    $("voice-state").textContent = "";
+  // Keep an error on screen; clear anything else, since "listening" would be
+  // a lie the moment the call is down.
+  if (!$("voice-state").textContent.toLowerCase().includes("refused")
+      && !$("voice-state").textContent.toLowerCase().includes("blocked"))
+    setVoiceState("");
 }
 
-$("voice").onclick = () => (talking ? stopVoice() : startVoice());
+/* ---------------- full-screen voice mode ----------------
+   The sidebar version worked and felt like dictating into a text box. This
+   takes the screen, puts the conversation in the middle, and moves with your
+   voice — so it is obvious it is listening before any transcript arrives. */
+let audioCtx = null, levelRaf = null, meters = [];
+
+/* One analyser per stream — yours and the interviewer's. The louder one wins,
+   which is what decides the orb's colour: whoever has the floor. */
+function meterFor(stream, who) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    audioCtx.createMediaStreamSource(stream).connect(analyser);
+    meters.push({ who, analyser, data: new Uint8Array(analyser.frequencyBinCount) });
+  } catch (e) {
+    // No Web Audio: the conversation still works, it just doesn't shimmer.
+    console.warn("audio metering unavailable:", e);
+  }
+}
+
+function startMetering() {
+  const orb = $("v-orb");
+  const tick = () => {
+    let best = { level: 0, who: null };
+    for (const m of meters) {
+      m.analyser.getByteFrequencyData(m.data);
+      let sum = 0;
+      for (const v of m.data) sum += v;
+      // Scaled so ordinary speech lands near the top of the range; the raw
+      // mean sits around 0.05 and would barely move the orb.
+      const level = Math.min(1, (sum / m.data.length / 255) * 3.2);
+      if (level > best.level) best = { level, who: m.who };
+    }
+    orb.style.setProperty("--level", best.level.toFixed(3));
+    orb.classList.toggle("agent", best.who === "agent" && best.level > 0.06);
+    orb.classList.toggle("idle", best.level <= 0.03);
+    levelRaf = requestAnimationFrame(tick);
+  };
+  cancelAnimationFrame(levelRaf);
+  tick();
+}
+
+function stopMetering() {
+  cancelAnimationFrame(levelRaf);
+  levelRaf = null; meters = [];
+  $("v-orb").style.setProperty("--level", "0");
+  $("v-orb").classList.add("idle");
+  $("v-orb").classList.remove("agent");
+}
+
+function voiceTurn(who, text) {
+  const log = $("v-log");
+  const bubble = el("div", "vturn " + (who === "agent" ? "agent" : "you"), text);
+  log.append(bubble);
+  while (log.children.length > 6) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+/* The checklist, in the traveller's words, beside the conversation. Same data
+   as the sidebar board — this is the version you see while talking. */
+function renderVoiceChecklist() {
+  const host = $("v-checklist");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!voiceTopics.length) {
+    host.append(el("div", "empty", "Loading…"));
+    return;
+  }
+  voiceTopics.forEach(({ id, label }) => {
+    const value = String((TOPIC_VALUE[id] || (() => ""))(voiceFields) || "");
+    const covered = voiceCovered.has(id);
+    const row = el("div", "vcheck " + (value || covered ? "on" : "off"));
+    row.append(el("div", "mk", value || covered ? "✓" : "○"));
+    const body = el("div");
+    body.append(el("div", "lb", label));
+    if (value) body.append(el("div", "vv", value));
+    else if (covered) body.append(el("div", "vv", "none"));
+    row.append(body);
+    host.append(row);
+  });
+}
+
+function openVoiceStage() {
+  $("stage-voice").classList.add("on");
+  renderVoiceChecklist();
+  $("v-close").focus();
+}
+
+function closeVoiceStage() {
+  $("stage-voice").classList.remove("on");
+  if (talking) stopVoice();
+}
+
+$("v-close").onclick = closeVoiceStage;
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && $("stage-voice").classList.contains("on")) closeVoiceStage();
+});
+
+$("v-start").onclick = () => startVoice();
+$("v-stop").onclick = () => stopVoice();
+$("v-plan").onclick = () => { closeVoiceStage(); start(); };
+
+// The sidebar button now opens the stage rather than starting in place.
+$("voice").onclick = () => { openVoiceStage(); startVoice(); };
 
 /* ---------------- feed ---------------- */
 function feedAdd(node) {
@@ -2060,6 +2332,114 @@ function renderAsk(d) {
   $("rail-body").scrollTop = $("rail-body").scrollHeight;
 }
 
+/* ---------------- resizable panes ----------------
+   Each splitter writes one CSS custom property on <html>, so a drag is a
+   single property write rather than a layout walk, and the sizes survive a
+   reload. Keyboard-operable too: a divider you can only reach with a mouse
+   isn't really a control. */
+const PANES = {
+  "--aside-w": { min: 280, max: 720, def: 400 },
+  "--rail-w":  { min: 260, max: 720, def: 380 },
+  "--notes-h": { min: 120, max: 900, def: null },       // vh default in CSS
+  "--notes-done-h": { min: 100, max: 900, def: null },
+};
+
+function paneSet(name, px) {
+  const { min, max } = PANES[name];
+  const value = Math.max(min, Math.min(max, Math.round(px)));
+  document.documentElement.style.setProperty(name, value + "px");
+  try { localStorage.setItem("wayfinder" + name, String(value)); } catch { /* private mode */ }
+  return value;
+}
+
+function paneGet(name) {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return parseFloat(raw) || 0;
+}
+
+function restorePanes() {
+  for (const name of Object.keys(PANES)) {
+    let saved = null;
+    try { saved = localStorage.getItem("wayfinder" + name); } catch { /* ignore */ }
+    if (saved) document.documentElement.style.setProperty(name, saved + "px");
+  }
+}
+
+/* `grow` is which direction increases the pane: the left sidebar grows as the
+   pointer moves right, the right one as it moves left. */
+function makeSplitter(id, { name, axis, grow, live }) {
+  const handle = $(id);
+  if (!handle) return;
+
+  // `name` may be a function: the notes panel writes a different variable
+  // once the run has finished, so shrinking it at the end doesn't overwrite
+  // the size you chose while it was running.
+  const which = () => (typeof name === "function" ? name() : name);
+  const apply = px => { paneSet(which(), px); if (live) live(); };
+
+  handle.addEventListener("pointerdown", down => {
+    down.preventDefault();
+    // Capture keeps the drag alive once the pointer leaves the 5px handle,
+    // which is most of any real drag. It throws when the id is not an active
+    // pointer, and an exception here aborts the handler before the move
+    // listener is attached — a splitter that silently does nothing.
+    try { handle.setPointerCapture(down.pointerId); } catch { /* drag on */ }
+    handle.classList.add("dragging");
+    document.body.classList.add("dragging");
+    if (axis === "y") document.body.classList.add("row");
+
+    const start = axis === "x" ? down.clientX : down.clientY;
+    // Fall back to the element's measured size, since the variable may still
+    // be at its CSS default (a vh value) and unset on the root.
+    const from = paneGet(which()) || sizeOfPane(handle, axis);
+
+    const move = ev => apply(from + grow * ((axis === "x" ? ev.clientX : ev.clientY) - start));
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.classList.remove("dragging");
+      document.body.classList.remove("dragging", "row");
+      if (live) live();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+
+  // Arrow keys, 16px a step. Same control, no pointer required.
+  handle.addEventListener("keydown", ev => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -1, ArrowDown: 1 }[ev.key];
+    if (step === undefined) return;
+    ev.preventDefault();
+    apply((paneGet(which()) || sizeOfPane(handle, axis)) + grow * step * 16);
+  });
+
+  // Double-click resets to the default, which is the way out of a drag that
+  // left a pane unusably narrow.
+  handle.addEventListener("dblclick", () => {
+    document.documentElement.style.removeProperty(which());
+    try { localStorage.removeItem("wayfinder" + which()); } catch { /* ignore */ }
+    if (live) live();
+  });
+}
+
+/* The pane a splitter resizes: the element before it, except the right-hand
+   one, where the pane is after. */
+function sizeOfPane(handle, axis) {
+  const el = handle.id === "split-right" ? handle.nextElementSibling
+                                         : handle.previousElementSibling;
+  if (!el) return 0;
+  const box = el.getBoundingClientRect();
+  return axis === "x" ? box.width : box.height;
+}
+
+// Leaflet caches the container size, so every resize has to tell it.
+const remeasureMap = () => { if (map) map.invalidateSize(); };
+
+/* Which notes height a drag should write depends on whether the run has
+   finished — the two states have separate sizes so shrinking the panel at the
+   end doesn't overwrite the size you chose while it was running. */
+const notesVar = () => (document.body.classList.contains("done") ? "--notes-done-h" : "--notes-h");
+
 /* ---------------- research notes ----------------
    A small markdown renderer. Small on purpose: the alternative is a CDN
    dependency, and the page has to stay self-contained. It covers what the
@@ -2145,6 +2525,8 @@ function renderNotes(list) {
   notes = list || [];
   const tabs = $("notetabs"), body = $("notebody");
   $("notes").classList.toggle("on", notes.length > 0);
+  document.body.classList.toggle("has-notes", notes.length > 0);
+  remeasureMap();
   if (!notes.length) {
     // Clear the tabs too. Hiding the panel leaves them in the DOM, so the
     // previous trip's tabs were still there waiting to reappear.
@@ -2201,6 +2583,20 @@ function shutRail() { $("rail").classList.add("shut"); document.body.classList.a
                       setTimeout(() => map && map.invalidateSize(), 200); }
 $("rail-shut").onclick = shutRail;
 $("rail-open").onclick = openRail;
+
+/* One place to say what the conversation is doing, so the sidebar hint and
+   the full-screen line can never disagree. */
+function setVoiceState(text, rich) {
+  $("voice-state").textContent = text;
+  const stage = $("v-state");
+  if (stage) { stage.innerHTML = ""; stage.append(rich || document.createTextNode(text)); }
+}
+
+function setVoiceButtons(live) {
+  $("v-start").style.display = live ? "none" : "";
+  $("v-stop").style.display = live ? "" : "none";
+  $("voice").textContent = live ? "■ End conversation" : "☎ Start conversation";
+}
 
 function setRailStatus(text, cls) {
   const s = $("rail-status"); s.textContent = text; s.className = "status " + (cls || "");
@@ -2282,6 +2678,10 @@ const HANDLERS = {
   },
   "run.resumed": () => { setStatus("planning", "running"); setRailStatus("planning", "running"); },
   "run.finished": d => { renderVerdict(d); setStatus("done", "finished"); setRailStatus("done", "finished");
+                         // The plan exists now: the map is what you look at,
+                         // and the notes become reference material.
+                         document.body.classList.add("done");
+                         setTimeout(remeasureMap, 400);
                          stepRow(d.passed ? "Your trip is ready" : "Finished — with some caveats", "done");
                          if (d.has_itinerary && d.feasible !== false) loadJourney(); },
   "run.error": d => { feedAdd(evNode("t-err", "!", "run error", d.message));
@@ -2304,6 +2704,7 @@ async function start() {
   // Swap the sidebar from "describe a trip" to "here's your trip" — the form
   // can't be acted on now, and it was burying the constraints you *can* change.
   document.body.classList.add("planning");
+  document.body.classList.remove("done");
   $("trip-dest").textContent = spec.destination;
   $("trip-when").textContent =
     `${spec.dates.start} → ${spec.dates.end} · ${spec.party.adults} adult`
@@ -2475,6 +2876,11 @@ $("trip-new").onclick = () => {
       loadJourney(); loadNotes();
     };
   } catch (e) { console.warn("history unavailable:", e); }
+
+  restorePanes();
+  makeSplitter("split-left",  { name: "--aside-w", axis: "x", grow:  1, live: remeasureMap });
+  makeSplitter("split-right", { name: "--rail-w",  axis: "x", grow: -1, live: remeasureMap });
+  makeSplitter("split-notes", { name: notesVar,    axis: "y", grow: -1, live: remeasureMap });
 
   // Rejoin whatever is still running before offering a fresh form — a page
   // that says "idle" while a trip is being planned is simply wrong.
