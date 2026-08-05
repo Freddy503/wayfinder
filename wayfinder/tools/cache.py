@@ -41,12 +41,22 @@ def cached(namespace: str) -> Callable[[Callable[..., T]], Callable[..., T]]:
         def wrapper(*args: Any, **kwargs: Any) -> T:
             path = _key(namespace, {"args": args, "kwargs": kwargs})
             if path.exists():
-                return json.loads(path.read_text(encoding="utf-8"))
+                try:
+                    return json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    # An unreadable entry is a miss, not a failure. Raising
+                    # here would kill a run over a corrupt file that we can
+                    # simply fetch again and overwrite.
+                    path.unlink(missing_ok=True)
+
             result = fn(*args, **kwargs)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8"
-            )
+            # Write, then rename. A plain `write_text` that is interrupted —
+            # the process killed, the disk full — leaves a half-written file
+            # that looks like a valid cache hit forever after.
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(result, ensure_ascii=False, default=str), encoding="utf-8")
+            os.replace(tmp, path)
             return result
 
         return wrapper

@@ -148,9 +148,7 @@ class StreamTranslator:
             events.append(self._tool_result(message, tool_call_id, agent))
             # Geocode hits additionally become map points, so the UI can plot
             # the research as it happens rather than only the finished route.
-            geo = self._geo_event(message, tool_call_id, agent)
-            if geo is not None:
-                events.append(geo)
+            events.extend(self._geo_events(message, tool_call_id, agent))
             return events
 
         text = _text_of(getattr(message, "content", "")).strip()
@@ -264,27 +262,53 @@ class StreamTranslator:
             },
         )
 
-    def _geo_event(self, message: Any, call_id: str, agent: str) -> Event | None:
-        """A successful geocode, as a plottable point."""
+    def _geo_events(self, message: Any, call_id: str, agent: str) -> list[Event]:
+        """Successful geocodes, as plottable points.
+
+        Handles both the single tool and the batch. Missing the batch is what
+        emptied the map during a run: `geocode_all` replaced almost every
+        `geocode` call, so the points only appeared at the end when the
+        finished route was drawn — for most of the wait the map sat blank
+        while the agent was busy locating a dozen places.
+        """
         origin = self._calls.get(call_id, {})
-        if origin.get("name") != "geocode":
-            return None
+        name = origin.get("name")
         parsed = _as_dict(getattr(message, "content", ""))
-        if not parsed or not parsed.get("found"):
-            return None
-        try:
-            lat, lon = float(parsed["lat"]), float(parsed["lon"])
-        except (KeyError, TypeError, ValueError):
-            return None
-        return Event(
-            "geo",
-            {
-                "agent": agent,
-                "name": parsed.get("name") or origin.get("args", {}).get("place", ""),
-                "lat": lat,
-                "lon": lon,
-            },
-        )
+        if not parsed:
+            return []
+
+        if name == "geocode":
+            hits = [(parsed, origin.get("args", {}).get("place", ""))]
+        elif name == "geocode_all":
+            asked = origin.get("args", {}).get("places") or []
+            hits = [
+                (hit, asked[i] if i < len(asked) else "")
+                for i, hit in enumerate(parsed.get("results") or [])
+                if isinstance(hit, dict)
+            ]
+        else:
+            return []
+
+        events: list[Event] = []
+        for hit, fallback in hits:
+            if not hit.get("found"):
+                continue
+            try:
+                lat, lon = float(hit["lat"]), float(hit["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            events.append(
+                Event(
+                    "geo",
+                    {
+                        "agent": agent,
+                        "name": hit.get("name") or fallback,
+                        "lat": lat,
+                        "lon": lon,
+                    },
+                )
+            )
+        return events
 
     def _todo_events(self, update: dict[str, Any]) -> list[Event]:
         todos = update.get("todos")

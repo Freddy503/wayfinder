@@ -555,10 +555,19 @@ def finalise(
     if not path.exists():
         report = _missing_itinerary_report(error)
     else:
-        payload = load_itinerary_payload(path)
-        report = check_payload(spec, payload)
-        if report.metrics.get("schema_valid") == 1.0:
-            itinerary = Itinerary.model_validate(payload)
+        try:
+            payload = load_itinerary_payload(path)
+        except json.JSONDecodeError as exc:
+            # A truncated or malformed file is a *finding*, not a crash. It
+            # escaped here and took the whole run with it, and the resulting
+            # message said "the agent never wrote itinerary.json" about a file
+            # it had written — 5,907 bytes of it — which sent me looking in
+            # entirely the wrong place.
+            report = _unparseable_itinerary_report(path, exc)
+        else:
+            report = check_payload(spec, payload)
+            if report.metrics.get("schema_valid") == 1.0:
+                itinerary = Itinerary.model_validate(payload)
 
     (run_dir / "constraints.json").write_text(
         json.dumps(report.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -582,12 +591,35 @@ def finalise(
     )
 
 
-def _missing_itinerary_report(error: str | None) -> ConstraintReport:
-    from wayfinder.verify import CheckResult, Violation
+def _unparseable_itinerary_report(path: Path, exc: json.JSONDecodeError) -> ConstraintReport:
+    """The file exists but isn't JSON — usually output cut off mid-write.
 
+    Reported as a failed `schema_valid` like any other malformed itinerary, and
+    the message says where it broke and how big the file got, because the
+    difference between "never written" and "written and truncated at 5,907
+    bytes" is the difference between two very different investigations.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return _report_for_violation(
+        f"{path.name} is not valid JSON: {exc.msg} at line {exc.lineno}, column "
+        f"{exc.colno} (byte {exc.pos} of {size}). The file was written but is "
+        f"incomplete or malformed — most likely the output was cut off."
+    )
+
+
+def _missing_itinerary_report(error: str | None) -> ConstraintReport:
     message = f"the agent never wrote {ITINERARY_FILE}"
     if error:
         message += f" (run failed: {error})"
+    return _report_for_violation(message)
+
+
+def _report_for_violation(message: str) -> ConstraintReport:
+    from wayfinder.verify import CheckResult, Violation
+
     violation = Violation("schema_valid", "hard", message)
     return ConstraintReport(
         passed=False,
