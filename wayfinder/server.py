@@ -234,6 +234,30 @@ class RunSession:
     def _emit(self, event: Event) -> None:
         self.queue.put(event)
 
+    def _focus_destination(self) -> None:
+        """Centre the map on the destination, before any planning happens.
+
+        Best-effort and never fatal: a trip whose city could not be geocoded
+        is still a trip, and the map will fill in from the research anyway.
+        """
+        try:
+            from wayfinder.tools.geo import geocode
+
+            hit = geocode(self.live.current.destination)
+            if hit.get("found"):
+                self._emit(
+                    Event(
+                        "map.focus",
+                        {
+                            "name": hit.get("name") or self.live.current.destination,
+                            "lat": hit["lat"],
+                            "lon": hit["lon"],
+                        },
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._emit(Event("map.focus", {"error": f"{type(exc).__name__}: {exc}"}))
+
     def _run(self) -> None:
         translator = StreamTranslator()
         error: str | None = None
@@ -284,6 +308,14 @@ class RunSession:
                     },
                 )
             )
+
+            # Put the city on the map before the agent has done anything.
+            # It costs one cached geocode — 0.3s — and it is the difference
+            # between a blank grey pane for the first three minutes and a map
+            # of the place you asked about, immediately. Measured: the first
+            # real map point arrived at 191s, because the researchers spend
+            # the opening minutes searching, not geocoding.
+            self._focus_destination()
 
             payload: Any = {"messages": [{"role": "user", "content": user_message(self.live.current)}]}
 
@@ -558,6 +590,39 @@ def create_app() -> FastAPI:
                 }
             )
         return {"notes": notes}
+
+    @app.get("/api/runs/{run_id}/draft")
+    def draft(run_id: str) -> dict[str, Any]:
+        """The itinerary as it stands right now, mid-run.
+
+        The agent writes `itinerary.json` well before it finishes, then repairs
+        it against the checker two or three times. Until now none of that was
+        visible: the map stayed empty and the day cards appeared all at once at
+        the end, so a seven-minute run showed nothing for six of them despite
+        having a plannable draft for the last three.
+
+        Tolerant on purpose. A file caught mid-write is not an error, it's a
+        file caught mid-write — say so and let the caller try again.
+        """
+        from wayfinder.agent import locate_itinerary
+
+        run_dir = _run_dir_for(run_id)
+        path = locate_itinerary(run_dir)
+        if not path.exists():
+            return {"ready": False, "reason": "not written yet"}
+        try:
+            text = path.read_text(encoding="utf-8")
+            payload = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            return {"ready": False, "reason": "being written"}
+        if not isinstance(payload, dict) or not payload.get("days"):
+            return {"ready": False, "reason": "no days yet"}
+        return {
+            "ready": True,
+            "itinerary": payload,
+            # Lets the browser skip an identical re-render while polling.
+            "size": len(text),
+        }
 
     @app.get("/api/runs/{run_id}/artifact/{name}")
     def artifact(run_id: str, name: str) -> FileResponse:

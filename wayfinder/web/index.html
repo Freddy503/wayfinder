@@ -454,6 +454,23 @@
     .orb { width: 140px; height: 140px; }
   }
 
+  /* ---- draft state ----
+     The trip appears mid-run, before the checker has passed it. It has to look
+     provisional: showing an unverified plan as though it were final is worse
+     than showing nothing, because you might act on it. */
+  #draft-flag { display: none; }
+  body.draft #draft-flag {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+    color: var(--warn); border: 1px solid #4a3d1a; background: #221c0c;
+    padding: 2px 10px; border-radius: 20px;
+  }
+  body.draft #draft-flag .pulse {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--warn);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  body.draft .jcard { border-style: dashed; }
+
   /* Nothing to resize until there are notes to resize. */
   #split-notes { display: none; }
   body.has-notes #split-notes { display: block; }
@@ -714,6 +731,8 @@
     <button id="rail-open" class="sm">Show progress ›</button>
     <div id="journey" role="region" aria-label="Itinerary cards">
       <div class="daytabs" id="daytabs"></div>
+      <span id="draft-flag" title="Not checked yet — the agent is still working on it">
+        <span class="pulse"></span>draft</span>
       <div class="cardrow" id="cardrow"></div>
     </div>
 
@@ -2117,9 +2136,37 @@ async function loadJourney() {
     const res = await fetch(`/api/runs/${runId}/artifact/itinerary.json`);
     if (!res.ok) return;
     renderJourney(await res.json());
+    document.body.classList.remove("draft");
     // Fill the verdict's itinerary/sources panes now that the data exists.
     if (window.__fillPanes) window.__fillPanes();
   } catch (e) { console.warn("journey unavailable:", e); }
+}
+
+/* The draft, mid-run. The agent writes `itinerary.json` well before it
+   finishes and then repairs it two or three times against the checker; none of
+   that was visible, so a seven-minute run showed an empty map for six of them
+   while holding a plannable draft for the last three. Now the trip appears as
+   soon as it exists and improves as it's fixed. */
+let draftSize = -1, draftTimer = null;
+
+async function loadDraft() {
+  if (!runId || document.body.classList.contains("done")) return;
+  try {
+    const data = await (await fetch(`/api/runs/${runId}/draft`)).json();
+    if (!data.ready || data.size === draftSize) return;
+    draftSize = data.size;
+    document.body.classList.add("draft");
+    renderJourney(data.itinerary);
+  } catch { /* a draft is a bonus; the run is unaffected */ }
+}
+
+function watchDraft(on) {
+  clearInterval(draftTimer);
+  draftSize = -1;
+  document.body.classList.remove("draft");
+  // 6s. Each repair is a whole model turn, so nothing changes faster than
+  // that, and the poll is a local file read.
+  if (on) draftTimer = setInterval(loadDraft, 6000);
 }
 
 /* ---------------- run ---------------- */
@@ -2608,7 +2655,7 @@ const HANDLERS = {
     stepRow("Planning your trip to " + d.destination);
     setStatus("planning", "running"); setRailStatus("planning", "running");
     $("rawwrap").style.display = ""; $("plan-card").style.display = "";
-    watchNotes(true);
+    watchNotes(true); watchDraft(true);
   },
   "agent.text": d => {
     const sub = agentLabel(d.agent);
@@ -2656,6 +2703,9 @@ const HANDLERS = {
       line.append(document.createTextNode(v.message));
       node.querySelector(".body").append(line);
     });
+    // A check runs against a file the agent just wrote, so this is the
+    // earliest moment a draft can exist. Don't wait out the poll.
+    loadDraft();
     const hard = (d.violations || []).filter(v => v.severity === "hard").length;
     stepRow(d.passed ? "Everything checks out" :
       hard ? `Checked the plan — ${hard} thing${hard > 1 ? "s" : ""} to fix` :
@@ -2667,6 +2717,17 @@ const HANDLERS = {
     const note = el("div", "banner", "Changed: " + (d.notes || []).join("; "));
     progressHost().append(note);
     feedAdd(evNode("t-text", "✎", "constraints changed", (d.notes || []).join("; ")));
+  },
+  // The city, before the agent has done anything. One cached geocode, and the
+  // map stops being a blank grey pane for the first three minutes.
+  "map.focus": d => {
+    if (d.error || !d.lat) return;
+    ensureMap();
+    map.setView([d.lat, d.lon], 12);
+    // Not a pending fit: a research point arriving later should be free to
+    // re-frame the map around what was actually found.
+    pendingFit = null;
+    stepRow("Found " + d.name);
   },
   "geo": d => plotResearch(d),
   "run.waiting": d => {
@@ -2688,7 +2749,7 @@ const HANDLERS = {
                       stepRow("Something went wrong — details below", "done");
                       setStatus("error", "error"); setRailStatus("error", "error"); },
   "run.done": () => { source?.close(); $("go").disabled = false; $("w-next").disabled = false;
-                      loadNotes(); watchNotes(false); },
+                      loadNotes(); watchNotes(false); watchDraft(false); },
 };
 
 async function start() {
@@ -2787,7 +2848,7 @@ function attach(run) {
 
   fetch(`/api/constraints/${runId}`).then(r => r.json())
     .then(b => renderConstraints(b.constraints || [])).catch(() => {});
-  watchNotes(true);
+  watchNotes(true); watchDraft(true); loadDraft();
 
   source = new EventSource(`/api/stream/${runId}`);
   source.onmessage = e => { const d = JSON.parse(e.data); (HANDLERS[d.type] || (() => {}))(d); };
