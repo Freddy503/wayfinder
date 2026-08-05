@@ -1465,10 +1465,11 @@ let map = null, researchLayer = null, dayLayers = [], markerByCard = new Map();
 const DAY_COLORS = ["#6ee7a0", "#60a5fa", "#fbbf24", "#a78bfa", "#f87171", "#34d399", "#f472b6"];
 
 function ensureMap() {
-  if (map) return map;
-  // The map now owns the centre of the screen from the start, so there is no
-  // reveal to co-ordinate — only the placeholder to take down.
+  // Before the early return, not after: every caller is about to draw
+  // something, and a second run puts the placeholder back. Hiding it only on
+  // first construction would leave it stranded over every later map.
   $("map-empty").style.display = "none";
+  if (map) return map;
   map = L.map("map", { zoomControl: true, attributionControl: true })
        .setView([48, 8], 4);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
@@ -2144,7 +2145,12 @@ function renderNotes(list) {
   notes = list || [];
   const tabs = $("notetabs"), body = $("notebody");
   $("notes").classList.toggle("on", notes.length > 0);
-  if (!notes.length) return;
+  if (!notes.length) {
+    // Clear the tabs too. Hiding the panel leaves them in the DOM, so the
+    // previous trip's tabs were still there waiting to reappear.
+    tabs.innerHTML = ""; body.innerHTML = "";
+    return;
+  }
 
   // Keep whatever you were reading. Re-selecting the first tab on every poll
   // would yank the page out from under you every few seconds.
@@ -2292,8 +2298,7 @@ async function start() {
   }
   $("feed").innerHTML = ""; agents = new Map();
   $("progress").innerHTML = ""; works.clear();
-  notes = []; noteShown = null; noteSeen.clear();
-  $("notes").classList.remove("on"); $("notebody").innerHTML = "";
+  notes = []; noteShown = null; noteSeen.clear(); renderNotes([]);
   $("constraints").innerHTML = ""; $("con-note").textContent = "";
   $("live-card").style.display = "none";
   // Swap the sidebar from "describe a trip" to "here's your trip" — the form
@@ -2305,7 +2310,15 @@ async function start() {
     + `${spec.party.adults === 1 ? "" : "s"}${spec.party.children ? ` + ${spec.party.children}` : ""}`;
   openRail();
   // A fresh run gets a fresh map: drop the old route and research dots.
-  if (map) { clearJourney(); researchLayer.clearLayers(); researchBounds = null; }
+  if (map) {
+    clearJourney(); researchLayer.clearLayers(); researchBounds = null;
+    // And pull the camera back with them. Clearing the markers leaves the view
+    // where it was, so starting a trip to Ghent opened on a map captioned
+    // AMSTERDAM until the first geocode happened to land.
+    pendingFit = null;
+    map.setView([48, 8], 4);
+    $("map-empty").style.display = "";
+  }
   journeyData = null;
   $("go").disabled = true; $("w-next").disabled = true;
   setStatus("starting", "running"); setRailStatus("starting", "running");
