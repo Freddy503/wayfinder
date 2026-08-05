@@ -360,6 +360,47 @@
   .banner { padding: 8px 12px; border-radius: 8px; font-size: 12.5px; margin: 8px 0;
             border: 1px solid #234634; background: #0f2418; color: var(--ok); }
 
+  /* ---- research notes, under the map ----
+     A long run spends most of its time after the researchers have finished.
+     Their notes were on disk the whole time with nowhere to be read. */
+  #notes { flex: none; display: none; border-top: 1px solid var(--border);
+           background: var(--panel); max-height: 44vh; overflow: hidden;
+           flex-direction: column; }
+  #notes.on { display: flex; }
+  .notetabs { display: flex; gap: 6px; padding: 10px 16px 0; flex-wrap: wrap;
+              align-items: center; flex: none; }
+  .notetab { padding: 5px 12px; border-radius: 20px; font-size: 12px; cursor: pointer;
+             border: 1px solid var(--border); background: var(--panel-2); color: var(--dim);
+             user-select: none; }
+  .notetab.on { background: #223047; color: #cfe1ff; border-color: #33507d; }
+  .notetab .fresh { color: var(--accent); margin-left: 5px; }
+  .notebody { overflow-y: auto; padding: 12px 18px 18px; font-size: 13px;
+              line-height: 1.6; flex: 1; min-height: 0; }
+  .notebody h1, .notebody h2, .notebody h3 {
+    font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--text);
+    margin: 14px 0 6px; font-weight: 600; }
+  .notebody h1 { font-size: 15px; } .notebody h2 { font-size: 14px; }
+  .notebody h1:first-child, .notebody h2:first-child { margin-top: 0; }
+  .notebody p { margin: 0 0 8px; color: var(--dim); }
+  .notebody ul, .notebody ol { margin: 0 0 10px; padding-left: 20px; color: var(--dim); }
+  .notebody li { margin: 3px 0; }
+  .notebody li > strong:first-child { color: var(--text); }
+  .notebody strong { color: var(--text); font-weight: 600; }
+  .notebody a { color: var(--tool); text-decoration: none; word-break: break-word; }
+  .notebody a:hover { text-decoration: underline; }
+  .notebody code { font-family: var(--mono); font-size: 11.5px; background: #12151c;
+                   padding: 1px 5px; border-radius: 4px; }
+  .notebody hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .notebody table { border-collapse: collapse; width: 100%; margin: 0 0 10px;
+                    font-size: 12px; display: block; overflow-x: auto; }
+  .notebody th, .notebody td { border: 1px solid var(--border); padding: 5px 8px;
+                               text-align: left; }
+  .notebody th { color: var(--faint); font-weight: 600; font-size: 11px;
+                 text-transform: uppercase; letter-spacing: .5px; }
+  .notebody td { color: var(--dim); }
+  .notebody blockquote { margin: 0 0 10px; padding-left: 12px;
+                         border-left: 2px solid var(--border); color: var(--faint); }
+
   /* Once a run starts the intake form is dead weight — you cannot change the
      destination now, and the things you *can* change were sitting below it,
      off-screen. Planning mode hides it and puts the live constraints on top. */
@@ -566,6 +607,14 @@
     <div id="journey" role="region" aria-label="Itinerary cards">
       <div class="daytabs" id="daytabs"></div>
       <div class="cardrow" id="cardrow"></div>
+    </div>
+
+    <!-- The researchers' notes, under the map, from the moment they land.
+         On a long run these exist for most of the wait and had nowhere to be
+         seen. -->
+    <div id="notes" role="region" aria-label="Research notes">
+      <div class="notetabs" id="notetabs"></div>
+      <div class="notebody" id="notebody"></div>
     </div>
   </section>
 
@@ -2010,6 +2059,135 @@ function renderAsk(d) {
   $("rail-body").scrollTop = $("rail-body").scrollHeight;
 }
 
+/* ---------------- research notes ----------------
+   A small markdown renderer. Small on purpose: the alternative is a CDN
+   dependency, and the page has to stay self-contained. It covers what the
+   subagents actually write — headings, bullets, tables, bold, links — and
+   anything it doesn't understand survives as plain text rather than
+   disappearing.
+
+   Everything is escaped before any markup is inserted. These documents are
+   assembled from web search results, so treating them as trusted HTML would
+   mean rendering whatever a page the agent read decided to put there. */
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function inlineMd(s) {
+  return escapeHtml(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    // Only http(s): a bare [text](javascript:…) would otherwise become a link.
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+             '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+             '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+}
+
+function renderMarkdown(md) {
+  const out = [];
+  let list = null, inTable = false;
+
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const closeTable = () => { if (inTable) { out.push("</table>"); inTable = false; } };
+
+  for (const raw of md.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+
+    if (!line.trim()) { closeList(); closeTable(); continue; }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      closeList(); closeTable();
+      const level = Math.min(heading[1].length, 3);
+      out.push(`<h${level}>${inlineMd(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { closeList(); closeTable(); out.push("<hr>"); continue; }
+
+    // A table row. The |---|---| separator is skipped rather than rendered.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      closeList();
+      const cells = line.trim().slice(1, -1).split("|").map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+      if (!inTable) { out.push("<table>"); inTable = true;
+        out.push("<tr>" + cells.map(c => `<th>${inlineMd(c)}</th>`).join("") + "</tr>");
+        continue; }
+      out.push("<tr>" + cells.map(c => `<td>${inlineMd(c)}</td>`).join("") + "</tr>");
+      continue;
+    }
+    closeTable();
+
+    const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (bullet || numbered) {
+      const want = bullet ? "ul" : "ol";
+      if (list !== want) { closeList(); out.push(`<${want}>`); list = want; }
+      out.push(`<li>${inlineMd((bullet || numbered)[1])}</li>`);
+      continue;
+    }
+    closeList();
+
+    if (line.startsWith(">")) { out.push(`<blockquote>${inlineMd(line.slice(1).trim())}</blockquote>`); continue; }
+    out.push(`<p>${inlineMd(line)}</p>`);
+  }
+  closeList(); closeTable();
+  return out.join("");
+}
+
+let notes = [], noteShown = null, noteSeen = new Map(), notesTimer = null;
+
+function renderNotes(list) {
+  notes = list || [];
+  const tabs = $("notetabs"), body = $("notebody");
+  $("notes").classList.toggle("on", notes.length > 0);
+  if (!notes.length) return;
+
+  // Keep whatever you were reading. Re-selecting the first tab on every poll
+  // would yank the page out from under you every few seconds.
+  if (!notes.some(n => n.name === noteShown)) noteShown = notes[0].name;
+
+  tabs.innerHTML = "";
+  notes.forEach(n => {
+    const tab = el("div", "notetab" + (n.name === noteShown ? " on" : ""));
+    tab.append(document.createTextNode(`${n.icon} ${n.title}`));
+    // A dot until you've opened it, so a note that arrives while you're
+    // reading another one doesn't go unnoticed.
+    if (noteSeen.get(n.name) !== n.size) tab.append(el("span", "fresh", "•"));
+    tab.onclick = () => { noteShown = n.name; renderNotes(notes); };
+    tabs.append(tab);
+  });
+
+  const current = notes.find(n => n.name === noteShown);
+  if (current) {
+    noteSeen.set(current.name, current.size);
+    body.innerHTML = renderMarkdown(current.markdown);
+  }
+}
+
+async function loadNotes() {
+  if (!runId) return;
+  try {
+    const data = await (await fetch(`/api/runs/${runId}/research`)).json();
+    const incoming = data.notes || [];
+    // Cheap equality check — this polls, and re-rendering identical markdown
+    // would reset your scroll position every few seconds.
+    const same = incoming.length === notes.length
+      && incoming.every((n, i) => notes[i] && n.name === notes[i].name && n.size === notes[i].size);
+    if (!same) renderNotes(incoming);
+  } catch { /* notes are a bonus; the run is unaffected */ }
+}
+
+function watchNotes(on) {
+  clearInterval(notesTimer);
+  // 8s: these are local file reads, and a researcher takes minutes to write
+  // one. Anything faster is just noise on the server.
+  if (on) { loadNotes(); notesTimer = setInterval(loadNotes, 8000); }
+}
+
 /* ---------------- rail open/close ---------------- */
 function openRail() { $("rail").classList.remove("shut"); document.body.classList.remove("rail-shut");
                       setTimeout(() => map && map.invalidateSize(), 200); }
@@ -2028,6 +2206,7 @@ const HANDLERS = {
     stepRow("Planning your trip to " + d.destination);
     setStatus("planning", "running"); setRailStatus("planning", "running");
     $("rawwrap").style.display = ""; $("plan-card").style.display = "";
+    watchNotes(true);
   },
   "agent.text": d => {
     const sub = agentLabel(d.agent);
@@ -2052,6 +2231,7 @@ const HANDLERS = {
   "subagent.end": d => {
     feedAdd(evNode("t-sub", "⑃", "report ← " + (agents.get(d.id) || "subagent"), null, d.report));
     closeWork(d);
+    loadNotes();
   },
   "todos": d => {
     const host = $("todos"); host.innerHTML = "";
@@ -2101,7 +2281,8 @@ const HANDLERS = {
   "run.error": d => { feedAdd(evNode("t-err", "!", "run error", d.message));
                       stepRow("Something went wrong — details below", "done");
                       setStatus("error", "error"); setRailStatus("error", "error"); },
-  "run.done": () => { source?.close(); $("go").disabled = false; $("w-next").disabled = false; },
+  "run.done": () => { source?.close(); $("go").disabled = false; $("w-next").disabled = false;
+                      loadNotes(); watchNotes(false); },
 };
 
 async function start() {
@@ -2111,6 +2292,8 @@ async function start() {
   }
   $("feed").innerHTML = ""; agents = new Map();
   $("progress").innerHTML = ""; works.clear();
+  notes = []; noteShown = null; noteSeen.clear();
+  $("notes").classList.remove("on"); $("notebody").innerHTML = "";
   $("constraints").innerHTML = ""; $("con-note").textContent = "";
   $("live-card").style.display = "none";
   // Swap the sidebar from "describe a trip" to "here's your trip" — the form
@@ -2190,6 +2373,7 @@ function attach(run) {
 
   fetch(`/api/constraints/${runId}`).then(r => r.json())
     .then(b => renderConstraints(b.constraints || [])).catch(() => {});
+  watchNotes(true);
 
   source = new EventSource(`/api/stream/${runId}`);
   source.onmessage = e => { const d = JSON.parse(e.data); (HANDLERS[d.type] || (() => {}))(d); };
@@ -2272,7 +2456,10 @@ $("trip-new").onclick = () => {
       runId = hist.value;
       $("feed").innerHTML = "";
       feedAdd(evNode("t-text", "▸", "reopened past run", hist.value));
-      loadJourney();
+      // The research is part of what a past trip left behind, not just the
+      // itinerary — it's where the reasons behind the choices are.
+      notes = []; noteShown = null; noteSeen.clear();
+      loadJourney(); loadNotes();
     };
   } catch (e) { console.warn("history unavailable:", e); }
 

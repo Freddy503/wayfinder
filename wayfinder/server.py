@@ -58,6 +58,23 @@ RUNS_ROOT = (Path(__file__).resolve().parent.parent / "runs").resolve()
 #: than reconnecting, which EventSource would otherwise do automatically.
 DONE = Event("run.done", {})
 
+#: Human names for the research files. Keyed by stem, since the subagents pick
+#: the filenames and an unrecognised one should still get a readable tab.
+RESEARCH_TITLES = {
+    "neighborhoods": "Neighbourhoods & sights",
+    "neighbourhoods": "Neighbourhoods & sights",
+    "food": "Places to eat",
+    "logistics": "Getting around",
+    "flights": "Flights",
+}
+RESEARCH_ICONS = {
+    "neighborhoods": "🗺",
+    "neighbourhoods": "🗺",
+    "food": "🍽",
+    "logistics": "🚊",
+    "flights": "✈",
+}
+
 
 class PlanRequest(BaseModel):
     spec: dict[str, Any]
@@ -500,6 +517,37 @@ def create_app() -> FastAPI:
                     pass
             entries.append(entry)
         return entries[:40]
+
+    @app.get("/api/runs/{run_id}/research")
+    def research(run_id: str) -> dict[str, Any]:
+        """The subagents' notes, as soon as they hit disk.
+
+        These are written maybe a fifth of the way into a long run and then sit
+        there unread. On a five-day Amsterdam trip the researchers finished at
+        minute 17 and the plan appeared at minute 53 — half an hour of staring
+        at a spinner with three finished documents on disk the whole time.
+        """
+        run_dir = _run_dir_for(run_id)
+        notes = []
+        for path in sorted((run_dir / "research").glob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not text.strip():
+                continue      # created but not yet written
+            notes.append(
+                {
+                    "name": path.stem,
+                    "title": RESEARCH_TITLES.get(path.stem, path.stem.replace("_", " ").title()),
+                    "icon": RESEARCH_ICONS.get(path.stem, "📄"),
+                    "markdown": text,
+                    # Lets the browser skip a re-render when nothing changed —
+                    # this is polled while the run is going.
+                    "size": len(text),
+                }
+            )
+        return {"notes": notes}
 
     @app.get("/api/runs/{run_id}/artifact/{name}")
     def artifact(run_id: str, name: str) -> FileResponse:
