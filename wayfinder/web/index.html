@@ -1360,6 +1360,10 @@ function renderVerdict(d) {
     shown.forEach(([k, label]) =>
       row.append(el("span", null, `${label} ${(+m[k]).toFixed(2).replace(/\.00$/,"")}`)));
     row.append(el("span", null, `check calls ${d.check_calls ?? 0}`));
+    // Say where these went, so the numbers on screen and the numbers in
+    // LangSmith are obviously the same numbers.
+    if (d.trace_id && d.scores && Object.keys(d.scores).length)
+      row.append(el("span", null, "· scored in LangSmith"));
     card.append(row);
   }
 

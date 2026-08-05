@@ -114,6 +114,9 @@ class RunResult:
     error: str | None = None
     check_calls: int = 0
     messages: list[Any] = field(default_factory=list)
+    #: The LangSmith root run, so the code evaluators' scores can be attached
+    #: to the trace you actually look at rather than only to an experiment.
+    trace_id: Any = None
 
     def tool_calls(self) -> dict[str, int]:
         """How many times each tool was called, from the message history.
@@ -499,11 +502,19 @@ def plan_trip(
     (run_dir / "config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
 
     error: str | None = None
+    # Fixed up front so the finished run can be found again and scored. The
+    # tracer would generate one too late to be useful — by the time the graph
+    # returns, nothing has said which run it was.
+    from wayfinder.evals.feedback import new_run_id
+
+    trace_id = new_run_id()
+
     messages: list[Any] = []
     try:
         state = agent.invoke(
             {"messages": [{"role": "user", "content": user_message(spec)}]},
             config={
+                "run_id": trace_id,
                 "recursion_limit": config.recursion_limit,
                 "run_name": f"wayfinder:{spec.slug}",
                 "metadata": {
@@ -517,7 +528,9 @@ def plan_trip(
     except Exception as exc:  # noqa: BLE001 - the run's failure is a result, not a crash
         error = f"{type(exc).__name__}: {exc}"
 
-    return finalise(spec, config, run_dir, counter["calls"], messages, error)
+    result = finalise(spec, config, run_dir, counter["calls"], messages, error)
+    result.trace_id = trace_id
+    return result
 
 
 def finalise(

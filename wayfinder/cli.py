@@ -138,6 +138,16 @@ def plan(
     _print_report(result.report)
     _print_metrics(result.report)
 
+    # The code evaluators, on the trace itself — so a real trip is scored in
+    # the LangSmith UI and not only inside a dataset experiment.
+    from wayfinder.evals.feedback import record, summary
+
+    scores = record(result.trace_id, result)
+    if scores:
+        console.print(f"\n[dim]scores →[/] {summary(scores)}")
+        if result.trace_id:
+            console.print(f"[dim]sent to LangSmith as feedback on run[/] {result.trace_id}")
+
     raise typer.Exit(0 if result.report.passed else 1)
 
 

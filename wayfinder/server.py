@@ -241,7 +241,13 @@ class RunSession:
                 self._counter,
                 checkpointer=InMemorySaver(),
             )
+            # Fixed up front so the finished run can be scored on its own
+            # trace, exactly as the CLI path does.
+            from wayfinder.evals.feedback import new_run_id
+
+            trace_id = new_run_id()
             graph_config = {
+                "run_id": trace_id,
                 "configurable": {"thread_id": self.id},
                 "recursion_limit": self.config.recursion_limit,
                 "run_name": f"wayfinder-web:{self.live.current.slug}",
@@ -307,6 +313,7 @@ class RunSession:
 
         except Exception as exc:  # noqa: BLE001 — surface it, don't kill the server
             error = f"{type(exc).__name__}: {exc}"
+            trace_id = locals().get("trace_id")
             self._emit(Event("run.error", {"message": error, "trace": traceback.format_exc()}))
 
         # A failed run still gets scored, exactly as on the CLI path, so the
@@ -336,6 +343,14 @@ class RunSession:
                     result.itinerary.infeasibility_reason if result.itinerary else None
                 ),
             }
+            # Score the trace, so a trip planned in the browser shows up in
+            # LangSmith with the same numbers a dataset experiment would give
+            # it — not just tokens and latency.
+            from wayfinder.evals.feedback import record
+
+            result.trace_id = trace_id
+            self.result["scores"] = record(trace_id, result)
+            self.result["trace_id"] = str(trace_id) if trace_id else None
             self._emit(Event("run.finished", self.result))
         except Exception as exc:  # noqa: BLE001
             self._emit(Event("run.error", {"message": f"scoring failed: {exc}"}))

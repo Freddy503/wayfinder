@@ -49,6 +49,45 @@ EXPERIMENT_MATRIX: dict[str, AgentConfig] = {
 }
 
 
+def outputs_for(result: Any) -> dict[str, Any]:
+    """The shape every evaluator reads, built from one finished run.
+
+    Extracted so the dataset target and a one-off trip produce byte-identical
+    inputs to the same evaluators. Two functions computing "the same" scores is
+    how an experiment and a real run start quietly disagreeing.
+    """
+    markdown = sources = ""
+    if result.itinerary is not None:
+        markdown = render_markdown(result.spec, result.itinerary, result.report)
+        sources = render_sources(result.itinerary)
+
+    tool_calls = result.tool_calls()
+    return {
+        "passed": result.report.passed,
+        "check_calls": result.check_calls,
+        # Effort, so the matrix can compare arms on work done and not just
+        # on quality — which saturates at 1.0 on anything easy.
+        "tool_calls": sum(tool_calls.values()),
+        "tool_breakdown": tool_calls,
+        # Turns spent verifying, not items verified. The batch tools were
+        # added precisely to collapse thirty of these into one, so counting
+        # a batch as a single call is the point — the metric measures the
+        # thing that costs wall-clock.
+        "verification_calls": sum(n for t, n in tool_calls.items() if t in VERIFY_TOOLS),
+        "error": result.error,
+        "run_dir": str(result.run_dir),
+        # Metrics and violations only — the full itinerary would balloon
+        # every judge prompt, and the markdown below says the same thing in
+        # a form a judge can actually read.
+        "report": {
+            "metrics": result.report.metrics,
+            "violations": [v.to_dict() for v in result.report.violations],
+        },
+        "itinerary_markdown": markdown,
+        "sources_markdown": sources,
+    }
+
+
 def make_target(config: AgentConfig, runs_root: Path | None = None):
     """Build the callable LangSmith runs against each dataset example.
 
@@ -60,41 +99,7 @@ def make_target(config: AgentConfig, runs_root: Path | None = None):
     def target(inputs: dict[str, Any]) -> dict[str, Any]:
         spec = TripSpec.model_validate(inputs["spec"])
         run_dir = new_run_dir(spec, root=runs_root)
-        result = plan_trip(spec, config, run_dir=run_dir)
-
-        markdown = ""
-        sources = ""
-        if result.itinerary is not None:
-            markdown = render_markdown(spec, result.itinerary, result.report)
-            sources = render_sources(result.itinerary)
-
-        tool_calls = result.tool_calls()
-        return {
-            "passed": result.report.passed,
-            "check_calls": result.check_calls,
-            # Effort, so the matrix can compare arms on work done and not just
-            # on quality — which saturates at 1.0 on anything easy.
-            "tool_calls": sum(tool_calls.values()),
-            "tool_breakdown": tool_calls,
-            # Turns spent verifying, not items verified. The batch tools were
-            # added precisely to collapse thirty of these into one, so counting
-            # a batch as a single call is the point — the metric measures the
-            # thing that costs wall-clock.
-            "verification_calls": sum(
-                n for t, n in tool_calls.items() if t in VERIFY_TOOLS
-            ),
-            "error": result.error,
-            "run_dir": str(result.run_dir),
-            # Metrics and violations only — the full itinerary would balloon
-            # every judge prompt, and the markdown below says the same thing in
-            # a form a judge can actually read.
-            "report": {
-                "metrics": result.report.metrics,
-                "violations": [v.to_dict() for v in result.report.violations],
-            },
-            "itinerary_markdown": markdown,
-            "sources_markdown": sources,
-        }
+        return outputs_for(plan_trip(spec, config, run_dir=run_dir))
 
     return target
 
