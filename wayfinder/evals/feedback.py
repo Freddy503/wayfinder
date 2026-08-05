@@ -98,11 +98,21 @@ def record(run_id: Any, result: Any, *, should_refuse: bool | None = None) -> di
         from langsmith import Client
 
         client = Client()
+        # `session_id` — the project the run lives in. Without it the SDK
+        # warns that feedback creation "is deprecated and will stop working",
+        # because it has to go looking for the run instead of being handed it.
+        #
+        # Not `project_id`: that names the same thing and the SDK raises
+        # "project_id cannot be provided if run_id or trace_id is provided".
+        # Worth stating because the two parameters sit next to each other in
+        # the signature and only one of them works here.
+        session_id = _session_id(client, os.environ.get("LANGSMITH_PROJECT", "").strip())
         for key, score in scores.items():
             client.create_feedback(
                 run_id,
                 key=key,
                 score=score,
+                **({"session_id": session_id} if session_id else {}),
                 # Marks these as machine-generated, so they sort apart from
                 # anything you later thumbs-up by hand in the UI.
                 feedback_source_type="model",
@@ -112,6 +122,28 @@ def record(run_id: Any, result: Any, *, should_refuse: bool | None = None) -> di
         logger.warning("could not send feedback to LangSmith: %s", exc)
 
     return scores
+
+
+#: One lookup per process. The project id never changes within a run, and
+#: resolving it per score would be twelve extra round trips per trip planned.
+_project_cache: dict[str, Any] = {}
+
+
+def _session_id(client: Any, name: str) -> Any:
+    """The id of the project runs are traced into, or None if unknown.
+
+    None is fine: the send still works, it just costs the deprecation warning
+    the argument exists to avoid. A project that doesn't exist yet must not
+    cost you the scores.
+    """
+    if not name:
+        return None
+    if name not in _project_cache:
+        try:
+            _project_cache[name] = client.read_project(project_name=name).id
+        except Exception:  # noqa: BLE001 — the project may not exist yet
+            _project_cache[name] = None
+    return _project_cache[name]
 
 
 def summary(scores: dict[str, float]) -> str:

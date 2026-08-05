@@ -17,6 +17,18 @@ from wayfinder.evals import feedback
 from wayfinder.verify import check_payload
 
 
+def _reject_bad_combination(kwargs: dict) -> None:
+    """Mirror the one argument combination the real client refuses.
+
+    A fake more permissive than the thing it stands in for is how a change
+    that breaks every send in production passes its tests — which is exactly
+    what happened here.
+    """
+    if "project_id" in kwargs:
+        msg = "project_id cannot be provided if run_id or trace_id is provided"
+        raise ValueError(msg)
+
+
 def result_for(payload, spec=None, *, error=None, check_calls=2):
     """A `RunResult`-shaped object, without running an agent."""
     spec = spec or make_spec()
@@ -122,6 +134,7 @@ def test_scores_are_posted_against_the_run(clean, monkeypatch):
 
     class FakeClient:
         def create_feedback(self, run_id, **kw):
+            _reject_bad_combination(kw)
             sent.append((str(run_id), kw["key"], kw["score"]))
 
     import langsmith
@@ -219,3 +232,79 @@ def test_the_summary_line_is_stable_and_readable(clean):
     line = feedback.summary(scores)
     assert line.startswith("plan_passes=1")
     assert "check_calls" not in line, "the console line is quality, not effort"
+
+
+def test_feedback_names_the_project_it_belongs_to(clean, monkeypatch):
+    """Without `session_id` the SDK warns that feedback creation "is
+    deprecated and will stop working", because it has to go looking for the
+    run instead of being handed it."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "wayfinder")
+    feedback._project_cache.clear()
+    captured = {}
+
+    class FakeClient:
+        def read_project(self, project_name):
+            assert project_name == "wayfinder"
+            return SimpleNamespace(id="proj-1")
+
+        def create_feedback(self, run_id, **kw):
+            captured.update(kw)
+
+    import langsmith
+
+    monkeypatch.setattr(langsmith, "Client", lambda *a, **kw: FakeClient())
+    feedback.record(feedback.new_run_id(), result_for(clean))
+
+    assert captured["session_id"] == "proj-1"
+    # Not `project_id`. It names the same thing and sits beside `session_id`
+    # in the signature, but the real client raises "project_id cannot be
+    # provided if run_id or trace_id is provided" — and `record` swallows
+    # exceptions, so getting this wrong stops all feedback silently.
+    assert "project_id" not in captured
+
+
+def test_the_project_is_looked_up_once_not_per_score(clean, monkeypatch):
+    """Twelve scores per trip; twelve lookups would be eleven wasted round
+    trips."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "wayfinder")
+    feedback._project_cache.clear()
+    lookups = []
+
+    class FakeClient:
+        def read_project(self, project_name):
+            lookups.append(project_name)
+            return SimpleNamespace(id="proj-1")
+
+        def create_feedback(self, run_id, **kw):
+            _reject_bad_combination(kw)
+
+    import langsmith
+
+    monkeypatch.setattr(langsmith, "Client", lambda *a, **kw: FakeClient())
+    feedback.record(feedback.new_run_id(), result_for(clean))
+    feedback.record(feedback.new_run_id(), result_for(clean))
+    assert lookups == ["wayfinder"]
+
+
+def test_an_unknown_project_still_sends(clean, monkeypatch):
+    """A project that doesn't exist yet must not cost you the scores."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "never-created")
+    feedback._project_cache.clear()
+    sent = []
+
+    class FakeClient:
+        def read_project(self, project_name):
+            raise ValueError("no such project")
+
+        def create_feedback(self, run_id, **kw):
+            _reject_bad_combination(kw)
+            sent.append(kw["key"])
+
+    import langsmith
+
+    monkeypatch.setattr(langsmith, "Client", lambda *a, **kw: FakeClient())
+    feedback.record(feedback.new_run_id(), result_for(clean))
+    assert "plan_passes" in sent
