@@ -482,6 +482,15 @@
   /* Nothing to resize until there are notes to resize. */
   #split-notes { display: none; }
   body.has-notes #split-notes { display: block; }
+
+  /* The developer view. Off by default: everything in here is about how the
+     plan was made, not about the trip. */
+  #rawwrap { display: none; }
+  body.dev #rawwrap { display: block; }
+  #devhead { font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+             margin: 6px 0 8px; word-break: break-all; }
+  #devhead a { color: var(--tool); text-decoration: none; }
+  .ds.mono { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
   .split:focus-visible::after { opacity: 1; background: var(--accent); }
 
   /* ---- research notes, under the map ----
@@ -544,7 +553,7 @@
 <body>
 <header>
   <h1>Wayfinder</h1>
-  <span class="sub">deep agent · live</span>
+  <span class="sub">plan a trip that actually works</span>
   <div class="spacer"></div>
   <span class="status" id="status">idle</span>
 </header>
@@ -691,7 +700,7 @@
     </div>
 
     <details class="opts">
-      <summary>Harness &amp; approvals</summary>
+      <summary>Advanced</summary>
       <div class="card" style="margin-top:10px">
         <label>Model</label>
         <!-- Filled from /api/defaults. Hardcoding options here is how the UI
@@ -699,10 +708,11 @@
              had moved — and it sends this value explicitly, so it wins. -->
         <select id="o-model"></select>
         <div class="hint" id="o-model-note" style="margin-top:4px"></div>
-        <div class="check" style="margin-top:10px"><input type="checkbox" id="o-sub" checked><span>Research subagents</span></div>
-        <div class="check"><input type="checkbox" id="o-skills" checked><span>Skills</span></div>
-        <div class="check"><input type="checkbox" id="o-repair" checked><span>Repair loop</span></div>
-        <h2 style="margin-top:14px">Ask me before…</h2>
+        <div class="check" style="margin-top:10px"><input type="checkbox" id="o-sub" checked><span>Research in parallel</span></div>
+        <div class="check"><input type="checkbox" id="o-skills" checked><span>House rules for formatting and budget</span></div>
+        <div class="check"><input type="checkbox" id="o-repair" checked><span>Re-check and fix the plan</span></div>
+        <div class="check"><input type="checkbox" id="o-dev"><span>Show what it&rsquo;s doing under the hood</span></div>
+        <h2 style="margin-top:14px">Check with me before…</h2>
         <div id="o-interrupts"></div>
       </div>
     </details>
@@ -773,8 +783,9 @@
       <!-- The technical feed survives, one disclosure down. It is genuinely
            the thing you want when a run goes wrong, and exactly not the thing
            you want while watching a trip come together. -->
-      <details class="raw" id="rawwrap" style="display:none">
+      <details class="raw" id="rawwrap">
         <summary>Every step, in detail</summary>
+        <div id="devhead" class="hint"></div>
         <div class="feed" id="feed" style="padding:0;overflow:visible"></div>
       </details>
     </div>
@@ -1566,11 +1577,14 @@ function checkRow(c) {
   row.append(el("div", "mk", c.skipped ? "–" : c.passed ? "✓" : (state === "warn" ? "!" : "✗")));
   const body = el("div", null);
   const head = el("div");
-  head.append(el("span", "nm", c.name));
-  if (c.skipped) head.append(el("span", "ds", "  not requested"));
+  // What it checked, in a sentence. `schema_valid` and `free_block` are how
+  // the code names them; nobody reading their holiday should meet either.
+  head.append(el("span", "nm", c.description));
+  if (c.skipped) head.append(el("span", "ds", "  didn't apply"));
   else if (c.detail) head.append(el("span", "dt", "  " + c.detail));
   body.append(head);
-  body.append(el("div", "ds", c.description));
+  if (document.body.classList.contains("dev"))
+    body.append(el("div", "ds mono", c.name));
   row.append(body);
   return row;
 }
@@ -1585,11 +1599,11 @@ function renderChecks(pane, d) {
   (d.violations || []).forEach(v => (byName[v.check] ||= []).push(v));
 
   const groups = [
-    ["Hard constraints — these decide pass or fail",
+    ["What had to be true",
      checks.filter(c => c.severity === "hard" && !c.skipped)],
-    ["Quality warnings — advisory only",
+    ["Worth knowing",
      checks.filter(c => c.severity === "soft" && !c.skipped)],
-    ["Not requested — skipped, and excluded from the pass rate",
+    ["Didn't apply to your trip",
      checks.filter(c => c.skipped)],
   ];
   groups.forEach(([label, list]) => {
@@ -1686,14 +1700,17 @@ function renderSourcesPane(pane) {
   });
 }
 
+let lastVerdict = null;
 function renderVerdict(d) {
+  lastVerdict = d;
   const card = el("div", "verdict " + (d.passed ? "pass" : "fail"));
 
   const hard = (d.checks || []).filter(c => c.severity === "hard" && !c.skipped);
   const passedHard = hard.filter(c => c.passed).length;
+  const failed = hard.length - passedHard;
   card.append(el("h3", null, d.passed
-    ? `Passed all ${hard.length} hard constraints`
-    : `Failed ${hard.length - passedHard} of ${hard.length} hard constraints`));
+    ? "Everything checks out"
+    : failed === 1 ? "One thing needs fixing" : `${failed} things need fixing`));
 
   if (d.error) card.append(el("div", "det", d.error));
   if (d.feasible === false)
@@ -1717,9 +1734,9 @@ function renderVerdict(d) {
 
   const tabs = el("div", "rtabs");
   const panes = {};
-  [["checks", `Checks (${(d.checks || []).length})`],
-   ["itinerary", "Itinerary"],
-   ["sources", "Sources"]].forEach(([key, label], i) => {
+  [["checks", `What I checked (${(d.checks || []).length})`],
+   ["itinerary", "Your trip"],
+   ["sources", "Where this came from"]].forEach(([key, label], i) => {
     const tab = el("button", "rtab" + (i === 0 ? " on" : ""), label);
     tab.onclick = () => {
       tabs.querySelectorAll(".rtab").forEach(t => t.classList.remove("on"));
@@ -1754,6 +1771,9 @@ function renderVerdict(d) {
   window.__fillPanes = () => {
     panes.itinerary.innerHTML = ""; renderItineraryPane(panes.itinerary);
     panes.sources.innerHTML = ""; renderSourcesPane(panes.sources);
+    // The checks pane too: turning the developer view on adds each check's
+    // code name, and it was rendered before the toggle was touched.
+    panes.checks.innerHTML = ""; renderChecks(panes.checks, d);
   };
 }
 
@@ -2695,9 +2715,15 @@ function setRailStatus(text, cls) {
 const HANDLERS = {
   "run.started": d => {
     feedAdd(evNode("t-text", "▸", "planning " + d.destination, d.config));
+    // Run identity, for the developer view: which model, which directory,
+    // and a link straight to the trace.
+    $("devhead").innerHTML = "";
+    [["run", d.run_id], ["model", d.config], ["directory", d.run_dir]]
+      .filter(([, v]) => v)
+      .forEach(([k, v]) => $("devhead").append(el("div", null, `${k}  ${v}`)));
     stepRow("Planning your trip to " + d.destination);
     setStatus("planning", "running"); setRailStatus("planning", "running");
-    $("rawwrap").style.display = ""; $("plan-card").style.display = "";
+    $("plan-card").style.display = "";
     watchNotes(true); watchDraft(true);
   },
   "agent.text": d => {
@@ -2782,6 +2808,12 @@ const HANDLERS = {
   },
   "run.resumed": () => { setStatus("planning", "running"); setRailStatus("planning", "running"); },
   "run.finished": d => { renderVerdict(d); setStatus("done", "finished"); setRailStatus("done", "finished");
+                         if (d.trace_id) {
+                           const line = el("div", null, "trace  ");
+                           const a = el("a", null, d.trace_id);
+                           a.href = "https://smith.langchain.com"; a.target = "_blank";
+                           line.append(a); $("devhead").append(line);
+                         }
                          // The plan exists now: the map is what you look at,
                          // and the notes become reference material.
                          document.body.classList.add("done");
@@ -2912,16 +2944,42 @@ $("trip-new").onclick = () => {
 
 /* ---------------- boot ---------------- */
 (async () => {
-  const tools = ["finalize_itinerary","check_itinerary","web_search","task",
-                 "geocode","estimate_travel","fx_convert"];
+  // Named for what they do, not what they're called. A traveller deciding
+  // whether to be asked first shouldn't have to know a tool name.
+  const gates = [
+    ["finalize_itinerary", "finishing the plan"],
+    ["check_itinerary", "checking it against your constraints"],
+    ["task", "sending researchers out"],
+    ["web_search", "searching the web"],
+    ["geocode", "looking up an address"],
+    ["estimate_travel", "working out a travel time"],
+    ["fx_convert", "converting a price"],
+  ];
   const host = $("o-interrupts");
-  tools.forEach(t => {
+  gates.forEach(([name, label]) => {
     const wrap = el("div", "check");
-    const box = el("input"); box.type = "checkbox"; box.value = t;
-    box.checked = t === "finalize_itinerary";
-    wrap.append(box, el("span", null, t));
+    const box = el("input"); box.type = "checkbox"; box.value = name;
+    box.checked = name === "finalize_itinerary";
+    wrap.append(box, el("span", null, label));
     host.append(wrap);
   });
+
+  /* The developer view. Everything technical was taken out of the traveller's
+     path, so it needs a real home rather than being deleted — the tool calls,
+     the researchers' prompts and reports, which skills loaded, and the run's
+     identity are genuinely useful when something looks wrong. */
+  const dev = $("o-dev");
+  const applyDev = () => {
+    document.body.classList.toggle("dev", dev.checked);
+    $("rawwrap").open = dev.checked;
+    try { localStorage.setItem("wayfinderDev", dev.checked ? "1" : ""); } catch { /* private */ }
+    // Redraw whatever is on screen: the checks pane gains or loses the code
+    // names, and the panes below it are rebuilt with them.
+    if (window.__fillPanes) window.__fillPanes();
+  };
+  try { dev.checked = !!localStorage.getItem("wayfinderDev"); } catch { /* private */ }
+  dev.onchange = applyDev;
+  applyDev();
 
   // The model list is the server's to state, so the browser can't send a
   // model the server was never configured for.
