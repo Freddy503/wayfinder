@@ -62,6 +62,9 @@
   #rail-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
   /* Reopens the rail once it's shut. Sits over the map's top-right corner,
      above Leaflet's own panes. */
+  #o-dev { font-family: var(--mono); font-size: 11px; padding: 3px 7px; }
+  #o-dev.on { background: #223047; color: #cfe1ff; border-color: #33507d; }
+
   #rail-open {
     position: absolute; top: 12px; right: 12px; z-index: 500; display: none;
     background: var(--panel); border: 1px solid var(--border);
@@ -711,7 +714,7 @@
         <div class="check" style="margin-top:10px"><input type="checkbox" id="o-sub" checked><span>Research in parallel</span></div>
         <div class="check"><input type="checkbox" id="o-skills" checked><span>House rules for formatting and budget</span></div>
         <div class="check"><input type="checkbox" id="o-repair" checked><span>Re-check and fix the plan</span></div>
-        <div class="check"><input type="checkbox" id="o-dev"><span>Show what it&rsquo;s doing under the hood</span></div>
+
         <h2 style="margin-top:14px">Check with me before…</h2>
         <div id="o-interrupts"></div>
       </div>
@@ -738,6 +741,22 @@
 
     <!-- The finished plan lands here: checks, itinerary, sources. -->
     <div id="result"></div>
+
+    <!-- Changing the trip once it exists. A real trip is planned iteratively;
+         starting over throws away research that is still perfectly good. -->
+    <div class="card" id="refine-card" style="display:none">
+      <h2>Change something</h2>
+      <div class="hint" style="margin:-6px 0 8px">Tell me what to adjust and I'll
+        work from what I already found — no need to start again.</div>
+      <textarea id="refine-text" rows="2"
+        placeholder="move Tuesday's dinner an hour later"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="refine-go" style="flex:1">Make the change</button>
+        <button id="refine-mic" style="flex:none" title="Say it instead">🎙</button>
+      </div>
+      <div class="hint" id="refine-state" style="margin-top:6px"></div>
+      <div id="refine-log" style="margin-top:8px"></div>
+    </div>
   </aside>
 
   <div class="split v" id="split-left" role="separator" aria-orientation="vertical"
@@ -773,6 +792,8 @@
       <strong style="font-size:13px">Planning</strong>
       <span class="status" id="rail-status" style="font-size:11px">idle</span>
       <div class="spacer"></div>
+      <button id="o-dev" class="sm" title="Show what it's doing under the hood"
+              aria-pressed="false">&lt;/&gt;</button>
       <button id="rail-shut" class="sm" title="Hide">›</button>
     </div>
     <div id="rail-body">
@@ -2818,6 +2839,12 @@ const HANDLERS = {
                          // and the notes become reference material.
                          document.body.classList.add("done");
                          setTimeout(remeasureMap, 400);
+                         // A finished plan is one you can now change.
+                         if (d.has_itinerary) {
+                           $("refine-card").style.display = "";
+                           $("refine-go").disabled = false;
+                           $("refine-state").textContent = "";
+                         }
                          stepRow(d.passed ? "Your trip is ready" : "Finished — with some caveats", "done");
                          if (d.has_itinerary && d.feasible !== false) loadJourney(); },
   "run.error": d => { feedAdd(evNode("t-err", "!", "run error", d.message));
@@ -2836,6 +2863,8 @@ async function start() {
   $("progress").innerHTML = ""; works.clear();
   notes = []; noteShown = null; noteSeen.clear(); renderNotes([]);
   photos = {}; currentDay = 0;
+  $("refine-card").style.display = "none";
+  $("refine-log").innerHTML = ""; $("refine-state").textContent = "";
   $("constraints").innerHTML = ""; $("con-note").textContent = "";
   $("live-card").style.display = "none";
   // Swap the sidebar from "describe a trip" to "here's your trip" — the form
@@ -2931,6 +2960,85 @@ function attach(run) {
   source.onerror = () => { setStatus("disconnected", "error"); source.close(); $("go").disabled = false; };
 }
 
+/* ---------------- refining a trip that already exists ----------------
+   The same stream, the same rail, the same draft renderer — a refinement is
+   just another run against a run directory that already has research in it.
+   It gets a new run id, so progress is its own; the trip on disk is shared. */
+function refineLog(text, kind) {
+  const row = el("div", "step " + (kind || "done"));
+  row.append(el("div", "mk", kind === "now" ? "▸" : "✓"));
+  row.append(el("div", "txt", text));
+  $("refine-log").append(row);
+  while ($("refine-log").children.length > 4) $("refine-log").removeChild($("refine-log").firstChild);
+}
+
+async function refineTrip(text) {
+  const request = (text ?? $("refine-text").value).trim();
+  if (!request || !runId) return;
+
+  $("refine-go").disabled = true;
+  $("refine-state").textContent = "working on it…";
+  refineLog(request, "now");
+
+  let res;
+  try {
+    res = await fetch(`/api/refine/${runId}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ request }),
+    });
+  } catch (e) {
+    $("refine-state").textContent = "could not reach the server: " + e;
+    $("refine-go").disabled = false; return;
+  }
+  if (!res.ok) {
+    $("refine-state").textContent = (await res.json()).detail || `rejected (${res.status})`;
+    $("refine-go").disabled = false; return;
+  }
+
+  // A refinement is a new run against the same trip. Point everything at it —
+  // the draft renderer, the notes and the photos all key off `runId`.
+  runId = (await res.json()).run_id;
+  $("refine-text").value = "";
+  document.body.classList.remove("done");
+  $("progress").innerHTML = ""; works.clear();
+  draftSize = -1;
+  openRail();
+  setStatus("changing it", "running"); setRailStatus("changing it", "running");
+  watchNotes(true); watchDraft(true);
+
+  source?.close();
+  source = new EventSource(`/api/stream/${runId}`);
+  source.onmessage = e => { const d = JSON.parse(e.data); (HANDLERS[d.type] || (() => {}))(d); };
+  source.onerror = () => { setStatus("disconnected", "error"); source.close();
+                           $("refine-go").disabled = false; };
+}
+
+$("refine-go").onclick = () => refineTrip();
+$("refine-text").addEventListener("keydown", ev => {
+  // Enter sends; Shift+Enter is a newline, as in every other message box.
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); refineTrip(); }
+});
+
+/* Dictation rather than a full realtime call: a refinement is one sentence,
+   and opening an audio session for it would cost more than the change. */
+$("refine-mic").onclick = () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { $("refine-state").textContent = "this browser has no dictation — type it instead."; return; }
+  const rec = new SR();
+  rec.lang = navigator.language || "en-GB";
+  rec.interimResults = true;
+  rec.onstart = () => { $("refine-state").textContent = "listening…"; $("refine-mic").classList.add("primary"); };
+  rec.onresult = ev => {
+    $("refine-text").value = [...ev.results].map(r => r[0].transcript).join(" ").trim();
+  };
+  rec.onerror = ev => { $("refine-state").textContent = "dictation failed: " + ev.error; };
+  rec.onend = () => {
+    $("refine-mic").classList.remove("primary");
+    $("refine-state").textContent = $("refine-text").value ? "hit Make the change when ready" : "";
+  };
+  rec.start();
+};
+
 $("trip-new").onclick = () => {
   // Back to intake. The run keeps streaming into the rail if it's still going —
   // stopping it isn't what "plan a different trip" asks for, and the results
@@ -2968,17 +3076,24 @@ $("trip-new").onclick = () => {
      path, so it needs a real home rather than being deleted — the tool calls,
      the researchers' prompts and reports, which skills loaded, and the run's
      identity are genuinely useful when something looks wrong. */
+  /* In the rail header, not the sidebar. It used to live inside `#intake`,
+     which `body.planning` hides the moment a run starts — so it could only be
+     switched on before planning, which is exactly when you don't yet know you
+     want it. */
   const dev = $("o-dev");
+  let devOn = false;
   const applyDev = () => {
-    document.body.classList.toggle("dev", dev.checked);
-    $("rawwrap").open = dev.checked;
-    try { localStorage.setItem("wayfinderDev", dev.checked ? "1" : ""); } catch { /* private */ }
+    document.body.classList.toggle("dev", devOn);
+    dev.classList.toggle("on", devOn);
+    dev.setAttribute("aria-pressed", String(devOn));
+    $("rawwrap").open = devOn;
+    try { localStorage.setItem("wayfinderDev", devOn ? "1" : ""); } catch { /* private */ }
     // Redraw whatever is on screen: the checks pane gains or loses the code
     // names, and the panes below it are rebuilt with them.
     if (window.__fillPanes) window.__fillPanes();
   };
-  try { dev.checked = !!localStorage.getItem("wayfinderDev"); } catch { /* private */ }
-  dev.onchange = applyDev;
+  try { devOn = !!localStorage.getItem("wayfinderDev"); } catch { /* private */ }
+  dev.onclick = () => { devOn = !devOn; applyDev(); };
   applyDev();
 
   // The model list is the server's to state, so the browser can't send a
@@ -3036,7 +3151,12 @@ $("trip-new").onclick = () => {
       // The research is part of what a past trip left behind, not just the
       // itinerary — it's where the reasons behind the choices are.
       notes = []; noteShown = null; noteSeen.clear();
+      photos = {}; currentDay = 0;
       loadJourney(); loadNotes();
+      // Reopened trips are refinable too — the research is still on disk.
+      document.body.classList.add("planning", "done");
+      $("refine-card").style.display = "";
+      $("refine-go").disabled = false;
     };
   } catch (e) { console.warn("history unavailable:", e); }
 

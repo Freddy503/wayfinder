@@ -21,7 +21,7 @@ from deepagents.backends import FilesystemBackend
 
 from wayfinder.adjust import LiveSpec, summarise_constraints
 from wayfinder.models import DEFAULT_MODEL, resolve_model
-from wayfinder.prompts import MAIN_PROMPT
+from wayfinder.prompts import MAIN_PROMPT, REFINE_PROMPT
 from wayfinder.render import render_markdown, render_sources
 from wayfinder.schema import Itinerary, TripSpec
 from wayfinder.specs import load_itinerary_payload
@@ -368,6 +368,7 @@ def build_agent(
     config: AgentConfig,
     counter: dict[str, int],
     checkpointer: Any | None = None,
+    system_prompt: str | None = None,
 ):
     """Assemble the agent.
 
@@ -430,7 +431,7 @@ def build_agent(
 
     return create_deep_agent(
         model=resolve_model(config.model),
-        system_prompt=MAIN_PROMPT,
+        system_prompt=system_prompt or MAIN_PROMPT,
         tools=tools,
         subagents=subagents or None,
         skills=[SKILLS_VIRTUAL_PATH] if config.use_skills else None,
@@ -454,6 +455,42 @@ def user_message(spec: TripSpec) -> str:
         allow_unicode=True,
     )
     return f"Plan this trip.\n\n```yaml\n{body}```"
+
+
+def refine_message(spec: TripSpec, request: str) -> str:
+    """The user turn for a refinement.
+
+    The spec goes in because the constraints still bind — a refinement that
+    breaks the budget is a broken plan — but the itinerary and the research
+    deliberately do not. They are on disk, `REFINE_PROMPT` says to read them,
+    and pasting a 7,000-token itinerary into every turn would cost more than
+    the change it is meant to make.
+    """
+    body = yaml.safe_dump(
+        spec.model_dump(mode="json", exclude={"should_refuse"}),
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    return (
+        f"Change the trip as follows:\n\n{request.strip()}\n\n"
+        f"The constraints still apply:\n\n```yaml\n{body}```"
+    )
+
+
+def version_itinerary(run_dir: Path) -> Path | None:
+    """Copy the current itinerary aside before a refinement changes it.
+
+    `itinerary.v1.json`, `v2`, and so on. Undo without duplicating the research
+    directory, and a record of how the trip got to where it is.
+    """
+    current = locate_itinerary(run_dir)
+    if not current.exists():
+        return None
+    version = 1
+    while (archived := run_dir / f"itinerary.v{version}.json").exists():
+        version += 1
+    archived.write_text(current.read_text(encoding="utf-8"), encoding="utf-8")
+    return archived
 
 
 def new_run_dir(spec: TripSpec, root: Path | None = None) -> Path:

@@ -44,8 +44,11 @@ from wayfinder.agent import (
     build_agent,
     finalise,
     new_run_dir,
+    refine_message,
     user_message,
+    version_itinerary,
 )
+from wayfinder.prompts import REFINE_PROMPT
 from wayfinder.adjust import AdjustmentError, LiveSpec, summarise_constraints
 from wayfinder.evals.datasets import load_cases
 from wayfinder.schema import TripSpec
@@ -112,6 +115,12 @@ class DecisionRequest(BaseModel):
     decisions: list[Decision]
 
 
+class RefineRequest(BaseModel):
+    """A change to a trip that already exists."""
+
+    request: str = Field(min_length=1, max_length=2_000)
+
+
 class AdjustRequest(BaseModel):
     """A constraint change, from the traveller, at any point in the run."""
 
@@ -127,7 +136,17 @@ class AdjustRequest(BaseModel):
 class RunSession:
     """One planning run: a worker thread, an event queue, and a resume latch."""
 
-    def __init__(self, request: PlanRequest) -> None:
+    def __init__(
+        self,
+        request: PlanRequest,
+        *,
+        run_dir: Path | None = None,
+        refine: str | None = None,
+    ) -> None:
+        #: Set when this session is changing a trip rather than making one.
+        #: The run directory is reused, so `research/*.md` and the current
+        #: itinerary are already in the agent's workspace.
+        self.refine = refine
         self.id = uuid.uuid4().hex[:12]
         # The spec is live: the traveller can change a constraint at any point
         # and the checker — and so the final verdict — grade against what was
@@ -143,7 +162,7 @@ class RunSession:
             interrupt_on=tuple(request.interrupt_on),
             allow_change_requests=request.allow_change_requests,
         )
-        self.run_dir = new_run_dir(self.live.current)
+        self.run_dir = run_dir or new_run_dir(self.live.current)
         self.queue: queue.Queue[Event | None] = queue.Queue()
         self.status = "starting"
         self.result: dict[str, Any] | None = None
@@ -285,6 +304,7 @@ class RunSession:
                 self.config,
                 self._counter,
                 checkpointer=InMemorySaver(),
+                system_prompt=REFINE_PROMPT if self.refine else None,
             )
             # Fixed up front so the finished run can be scored on its own
             # trace, exactly as the CLI path does.
@@ -308,6 +328,7 @@ class RunSession:
                         "run_dir": str(self.run_dir),
                         "destination": self.live.current.destination,
                         "config": self.config.label(),
+                        "refine": self.refine,
                         "interrupt_on": list(self.config.interrupt_on),
                     },
                 )
@@ -321,7 +342,12 @@ class RunSession:
             # the opening minutes searching, not geocoding.
             self._focus_destination()
 
-            payload: Any = {"messages": [{"role": "user", "content": user_message(self.live.current)}]}
+            opening = (
+                refine_message(self.live.current, self.refine)
+                if self.refine
+                else user_message(self.live.current)
+            )
+            payload: Any = {"messages": [{"role": "user", "content": opening}]}
 
             while True:
                 for chunk in agent.stream(
@@ -444,6 +470,37 @@ def create_app() -> FastAPI:
     @app.post("/api/plan")
     def start_plan(request: PlanRequest) -> dict[str, str]:
         session = RunSession(request)
+        runs[session.id] = session
+        session.start()
+        return {"run_id": session.id}
+
+    @app.post("/api/refine/{run_id}")
+    def refine(run_id: str, body: RefineRequest) -> dict[str, str]:
+        """Change a trip that already exists, rather than planning a new one.
+
+        Reuses the run directory, so `research/*.md` and the current itinerary
+        are already in the agent's workspace — the point of the whole feature
+        is not throwing away research that is still good. The itinerary is
+        copied aside first, so every refinement is undoable.
+
+        Returns a *new* run id: it is a separate stream with its own progress,
+        against the same trip on disk.
+        """
+        run_dir = _run_dir_for(run_id)
+        spec_file = run_dir / "spec.yaml"
+        if not spec_file.exists():
+            raise HTTPException(status_code=404, detail="that run has no spec to refine")
+
+        from wayfinder.specs import load_spec
+
+        spec = load_spec(spec_file)
+        version_itinerary(run_dir)
+
+        session = RunSession(
+            PlanRequest(spec=spec.model_dump(mode="json")),
+            run_dir=run_dir,
+            refine=body.request,
+        )
         runs[session.id] = session
         session.start()
         return {"run_id": session.id}
