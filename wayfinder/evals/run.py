@@ -198,8 +198,20 @@ def run_matrix(
     repetitions: int = 1,
     use_judges: bool = True,
     max_concurrency: int = 4,
+    cases: list[str] | None = None,
+    split: str | None = None,
 ) -> dict[str, Any]:
-    """Run several arms back to back. Compare them in the LangSmith UI."""
+    """Run several arms back to back. Compare them in the LangSmith UI.
+
+    `cases` and `split` are the reason this is runnable at all. Every arm over
+    all twenty cases with repetitions is ~22 hours and tens of dollars, so the
+    only sweep anyone actually does is a narrow one: two arms, the cases where
+    the answer can differ, three repetitions.
+
+    One arm failing does not lose the others. Each is a separate LangSmith
+    experiment that has already succeeded and cost real hours; a comprehension
+    would throw all of that away because arm three raised.
+    """
     client = Client()
     chosen = arms or list(EXPERIMENT_MATRIX)
     unknown = [a for a in chosen if a not in EXPERIMENT_MATRIX]
@@ -207,18 +219,23 @@ def run_matrix(
         msg = f"unknown arms {unknown}; known: {sorted(EXPERIMENT_MATRIX)}"
         raise KeyError(msg)
 
-    return {
-        arm: run_experiment(
-            EXPERIMENT_MATRIX[arm],
-            experiment_prefix=arm,
-            dataset_name=dataset_name,
-            repetitions=repetitions,
-            use_judges=use_judges,
-            max_concurrency=max_concurrency,
-            client=client,
-        )
-        for arm in chosen
-    }
+    results: dict[str, Any] = {}
+    for arm in chosen:
+        try:
+            results[arm] = run_experiment(
+                EXPERIMENT_MATRIX[arm],
+                experiment_prefix=f"{arm}-{split}" if split else arm,
+                dataset_name=dataset_name,
+                repetitions=repetitions,
+                use_judges=use_judges,
+                max_concurrency=max_concurrency,
+                cases=cases,
+                split=split,
+                client=client,
+            )
+        except Exception as exc:  # noqa: BLE001 — one arm, not the sweep
+            results[arm] = {"error": f"{type(exc).__name__}: {exc}"}
+    return results
 
 
 def run_local(
@@ -251,3 +268,94 @@ def _config_metadata(config: AgentConfig) -> dict[str, Any]:
     from dataclasses import asdict
 
     return {f"cfg_{k}": v for k, v in asdict(config).items()}
+
+
+#: What the comparison table shows. Quality first, then effort — and effort
+#: matters because quality saturates: on an easy case every arm scores 1.0 and
+#: the only thing left that separates them is what they spent getting there.
+COMPARE_KEYS = (
+    "plan_passes",
+    "hard_constraint_pass_rate",
+    "soft_constraint_pass_rate",
+    "route_efficiency",
+    "correctly_refused",
+    "verification_calls",
+    "check_calls",
+)
+
+
+def collect_scores(
+    experiment_names: list[str], client: Client | None = None
+) -> dict[str, dict[str, list[float]]]:
+    """Every feedback score for each experiment, keyed by arm then metric.
+
+    Returns the raw lists rather than means, because the spread is the point:
+    with repetitions, a difference smaller than the standard deviation is not a
+    result, and only the samples can tell you that.
+    """
+    client = client or Client()
+    out: dict[str, dict[str, list[float]]] = {}
+    for name in experiment_names:
+        scores: dict[str, list[float]] = {}
+        try:
+            runs = [r for r in client.list_runs(project_name=name, is_root=True, limit=100)]
+            for run in runs:
+                for feedback in client.list_feedback(run_ids=[run.id]):
+                    if feedback.score is not None:
+                        scores.setdefault(feedback.key, []).append(float(feedback.score))
+        except Exception:  # noqa: BLE001 — a missing experiment is a blank row
+            pass
+        out[name] = scores
+    return out
+
+
+def summarise(values: list[float]) -> tuple[float, float]:
+    """Mean and standard deviation. Zero spread when there is one sample —
+    which is not stability, it is a sample size of one, and the caller has to
+    say so rather than let a `0.000` imply confidence."""
+    if not values:
+        return (float("nan"), 0.0)
+    mean = sum(values) / len(values)
+    if len(values) < 2:
+        return (mean, 0.0)
+    variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+    return (mean, variance**0.5)
+
+
+def compare(
+    arms: list[str],
+    experiment_names: dict[str, str] | None = None,
+    client: Client | None = None,
+) -> dict[str, Any]:
+    """Arms side by side, each metric against the baseline.
+
+    A delta is only reported as meaningful when it exceeds the combined spread
+    of the two arms. Anything inside the noise is reported as "can't tell",
+    which is the honest answer and the one this project keeps needing.
+    """
+    names = experiment_names or {arm: arm for arm in arms}
+    raw = collect_scores([names[a] for a in arms], client=client)
+
+    table: dict[str, Any] = {}
+    for arm in arms:
+        scores = raw.get(names[arm], {})
+        table[arm] = {k: summarise(scores.get(k, [])) for k in COMPARE_KEYS}
+        table[arm]["_n"] = max((len(v) for v in scores.values()), default=0)
+
+    baseline = table.get("baseline")
+    if baseline:
+        for arm in arms:
+            if arm == "baseline":
+                continue
+            verdicts = {}
+            for key in COMPARE_KEYS:
+                mean, spread = table[arm][key]
+                base_mean, base_spread = baseline[key]
+                delta = mean - base_mean
+                noise = base_spread + spread
+                verdicts[key] = {
+                    "delta": delta,
+                    "meaningful": abs(delta) > noise > 0 or (noise == 0 and delta != 0),
+                }
+            table[arm]["_vs_baseline"] = verdicts
+    return table

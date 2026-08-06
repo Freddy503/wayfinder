@@ -23,6 +23,70 @@ app = typer.Typer(
 console = Console()
 
 
+#: Measured, not guessed — a two-day trip on the current configuration, from
+#: two Amsterdam runs at 921s and 839s. Longer trips take longer; this is for
+#: an estimate you can plan an evening around, not a promise.
+SECONDS_PER_RUN = 880
+
+#: LangSmith's cost estimate at list price, from the same runs ($0.076 and
+#: $0.118). The real OpenRouter bill is well under this because the system
+#: prompt is static and caches — everything run today came to $0.17 — so this
+#: is deliberately the pessimistic number.
+COST_PER_RUN = 0.12
+
+
+def _print_comparison(table: dict, arms: list[str], repetitions: int) -> None:
+    """Arms side by side, with the spread, and honest about what n=1 buys.
+
+    The whole reason this phase exists: a delta smaller than the noise is not
+    a result. Anything inside the combined spread is marked "≈" rather than
+    given an arrow, because an arrow reads as a finding.
+    """
+    from rich.table import Table
+
+    from wayfinder.evals.run import COMPARE_KEYS
+
+    grid = Table(title="arms compared" + (f" · {repetitions} repetitions" if repetitions > 1 else ""))
+    grid.add_column("metric")
+    for arm in arms:
+        grid.add_column(arm, justify="right")
+
+    for key in COMPARE_KEYS:
+        row = [key.replace("_", " ")]
+        for arm in arms:
+            mean, spread = table[arm][key]
+            if mean != mean:                      # NaN — nothing scored
+                row.append("[dim]—[/]")
+                continue
+            cell = f"{mean:.2f}" + (f" ±{spread:.2f}" if spread else "")
+            verdict = table[arm].get("_vs_baseline", {}).get(key)
+            if verdict:
+                delta = verdict["delta"]
+                if not verdict["meaningful"]:
+                    cell += "  [dim]≈[/]"
+                elif delta > 0:
+                    cell += f"  [green]+{delta:.2f}[/]"
+                else:
+                    cell += f"  [red]{delta:.2f}[/]"
+            row.append(cell)
+        grid.add_row(*row)
+
+    grid.add_row("[dim]runs scored[/]", *[f"[dim]{table[a]['_n']}[/]" for a in arms])
+    console.print(grid)
+
+    if repetitions < 2:
+        console.print(
+            "[yellow]One repetition[/] — every spread reads 0.00 because there is "
+            "one sample, not because the arm is stable. Re-run with "
+            "[bold]--repetitions 3[/] before believing any delta."
+        )
+    else:
+        console.print(
+            "[dim]≈ means the difference is inside the combined spread: "
+            "not a result, whichever way it points.[/]"
+        )
+
+
 def _load_env() -> None:
     load_dotenv(Path.cwd() / ".env")
 
@@ -363,17 +427,89 @@ def matrix(
         list[str] | None, typer.Option("--arm", help="Repeat to select arms. Default: all.")
     ] = None,
     dataset: Annotated[str, typer.Option(help="LangSmith dataset name.")] = "wayfinder-trips",
-    repetitions: Annotated[int, typer.Option(help="Runs per case.")] = 1,
+    repetitions: Annotated[int, typer.Option(help="Runs per case. Use 3+ for variance.")] = 1,
     judges: Annotated[bool, typer.Option(help="Include the LLM judges.")] = True,
+    case: Annotated[
+        list[str] | None, typer.Option("--case", help="Repeat to run only these cases.")
+    ] = None,
+    split: Annotated[
+        str | None, typer.Option("--split", help="Run one split (see `splits`).")
+    ] = None,
+    concurrency: Annotated[int, typer.Option(help="Parallel cases.")] = 4,
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation.")] = False,
 ) -> None:
-    """Run several arms back to back, then compare them in the LangSmith UI."""
+    """Run several arms back to back, then compare them.
+
+    Scope it. Every arm over all twenty cases with repetitions is a day of
+    wall-clock and tens of dollars; `--split` and `--case` are what make this
+    a thing you can actually run.
+    """
     _load_env()
-    from wayfinder.evals.run import EXPERIMENT_MATRIX, run_matrix
+    from wayfinder.evals.datasets import splits as dataset_splits
+    from wayfinder.evals.run import EXPERIMENT_MATRIX, compare, run_matrix
 
     chosen = arms or list(EXPERIMENT_MATRIX)
-    console.print(f"Running {len(chosen)} arms: {', '.join(chosen)}")
-    run_matrix(chosen, dataset_name=dataset, repetitions=repetitions, use_judges=judges)
-    console.print("[green]Done.[/] Compare them in the LangSmith experiment view.")
+    unknown = [a for a in chosen if a not in EXPERIMENT_MATRIX]
+    if unknown:
+        console.print(f"[red]Unknown arm(s)[/] {unknown}. Known: {', '.join(EXPERIMENT_MATRIX)}")
+        raise typer.Exit(2)
+    if case and split:
+        console.print("[red]Pass --case or --split, not both.[/]")
+        raise typer.Exit(2)
+
+    if case:
+        n_cases, scope = len(case), f"{len(case)} case(s)"
+    elif split:
+        known = dataset_splits()
+        if split not in known:
+            console.print(f"[red]Unknown split[/] {split!r}. Known: {', '.join(sorted(known))}")
+            raise typer.Exit(2)
+        n_cases, scope = len(known[split]), f"split {split!r}"
+    else:
+        n_cases, scope = 20, "all 20 cases"
+
+    _preflight(EXPERIMENT_MATRIX[chosen[0]].model, needs_langsmith=True)
+
+    runs = len(chosen) * n_cases * repetitions
+    hours = runs * SECONDS_PER_RUN / max(1, concurrency) / 3600
+    console.print(
+        f"[bold]{len(chosen)} arms[/] × {scope} × {repetitions} repetition(s) = "
+        f"[bold]{runs} agentic runs[/]"
+    )
+    console.print(
+        f"[dim]≈ {hours:.1f}h at concurrency {concurrency} · "
+        f"≈ ${runs * COST_PER_RUN:.2f} at list price "
+        f"(prompt caching makes the real bill lower)[/]"
+    )
+    console.print(f"[dim]arms: {', '.join(chosen)}[/]")
+
+    # Past a few runs this is hours of unattended work and real money. Ask.
+    if not yes and runs > 4 and not typer.confirm("\nStart?", default=False):
+        raise typer.Exit(1)
+
+    results = run_matrix(
+        chosen,
+        dataset_name=dataset,
+        repetitions=repetitions,
+        use_judges=judges,
+        max_concurrency=concurrency,
+        cases=case,
+        split=split,
+    )
+
+    failed = {a: r["error"] for a, r in results.items() if isinstance(r, dict) and "error" in r}
+    done = [a for a in chosen if a not in failed]
+    for arm, why in failed.items():
+        console.print(f"[red]{arm} failed:[/] {why}")
+    if not done:
+        raise typer.Exit(1)
+
+    _print_comparison(
+        compare(done, {a: f"{a}-{split}" if split else a for a in done}),
+        done,
+        repetitions,
+    )
+    console.print("\n[dim]Full detail in the LangSmith experiment view.[/]")
 
 
 @app.command("eval-local")
