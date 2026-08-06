@@ -446,7 +446,12 @@ def matrix(
     """
     _load_env()
     from wayfinder.evals.datasets import splits as dataset_splits
-    from wayfinder.evals.run import EXPERIMENT_MATRIX, compare, run_matrix
+    from wayfinder.evals.run import (
+        EXPERIMENT_MATRIX,
+        compare,
+        experiment_names,
+        run_matrix,
+    )
 
     chosen = arms or list(EXPERIMENT_MATRIX)
     unknown = [a for a in chosen if a not in EXPERIMENT_MATRIX]
@@ -504,11 +509,12 @@ def matrix(
     if not done:
         raise typer.Exit(1)
 
-    _print_comparison(
-        compare(done, {a: f"{a}-{split}" if split else a for a in done}),
-        done,
-        repetitions,
-    )
+    # The names LangSmith actually used, not the prefixes we asked for.
+    names = experiment_names({a: results[a] for a in done})
+    missing = [a for a in done if a not in names]
+    if missing:
+        console.print(f"[yellow]No experiment name for {missing}[/] — scores may be blank.")
+    _print_comparison(compare(done, names), done, repetitions)
     console.print("\n[dim]Full detail in the LangSmith experiment view.[/]")
 
 

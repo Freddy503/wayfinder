@@ -238,6 +238,22 @@ def run_matrix(
     return results
 
 
+def experiment_names(results: dict[str, Any]) -> dict[str, str]:
+    """The names LangSmith actually used, per arm.
+
+    Not the prefixes we asked for. `experiment_prefix="baseline"` becomes
+    `baseline-f1ffe9b0` — a suffix keeps repeated sweeps from colliding — so
+    looking the scores up by prefix finds nothing and prints an empty table
+    after two hours of runs. Ask the result object what it was called.
+    """
+    names: dict[str, str] = {}
+    for arm, result in results.items():
+        name = getattr(result, "experiment_name", None)
+        if name:
+            names[arm] = name
+    return names
+
+
 def run_local(
     config: AgentConfig,
     case_names: list[str] | None = None,

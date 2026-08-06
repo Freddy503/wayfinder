@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from deepagents.middleware.filesystem import FilesystemPermission
 
 from wayfinder.adjust import LiveSpec, summarise_constraints
 from wayfinder.models import DEFAULT_MODEL, resolve_model
@@ -48,6 +49,22 @@ SKILLS_SOURCE = REPO_ROOT / "skills"
 #: keeps a snapshot of the skills it actually ran with, which is what makes an
 #: old experiment reproducible after you've edited them.
 SKILLS_VIRTUAL_PATH = "/skills"
+
+#: What the agent may write, evaluated top to bottom, first match winning.
+#:
+#: `virtual_mode` already confines every path to the run directory, so this is
+#: not about escaping to the repo. It is about the one directory inside the run
+#: that must not change: `skills/` is copied in at setup precisely so each run
+#: keeps a snapshot of the rules it ran under. An agent that edits its own
+#: `SKILL.md` mid-run makes that snapshot a lie, and makes the experiment
+#: comparing it to another arm meaningless.
+#:
+#: Reading them is the entire point, so read stays open.
+WORKSPACE_PERMISSIONS = [
+    FilesystemPermission(operations=["read"], paths=["/skills/**"], mode="allow"),
+    FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny"),
+    FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="allow"),
+]
 
 
 @dataclass
@@ -438,6 +455,7 @@ def build_agent(
         # Virtual mode anchors every path to the run directory and blocks `..`
         # and `~`, so a stray write lands inside the run rather than in the repo.
         backend=FilesystemBackend(root_dir=str(run_dir), virtual_mode=True),
+        permissions=WORKSPACE_PERMISSIONS,
         interrupt_on=interrupt_on or None,
         checkpointer=checkpointer,
     )

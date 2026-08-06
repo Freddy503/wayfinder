@@ -292,3 +292,32 @@ def test_no_summary_evaluator_takes_varargs():
     for evaluator in SUMMARY_EVALUATORS:
         names = set(inspect.signature(evaluator).parameters)
         assert names <= supported, f"{evaluator.__name__} takes {names - supported}"
+
+
+def test_the_real_experiment_names_are_read_off_the_results():
+    """LangSmith appends a suffix: `experiment_prefix="baseline"` becomes
+    `baseline-f1ffe9b0`, so looking scores up by prefix finds nothing and
+    prints an empty table after hours of runs. That is exactly what the first
+    dry run did — 70 minutes of agentic work, "runs scored: 0"."""
+    from wayfinder.evals.run import experiment_names
+
+    results = {
+        "baseline": SimpleNamespace(experiment_name="baseline-f1ffe9b0"),
+        "no-repair-loop": SimpleNamespace(experiment_name="no-repair-loop-1d9c78e5"),
+    }
+    assert experiment_names(results) == {
+        "baseline": "baseline-f1ffe9b0",
+        "no-repair-loop": "no-repair-loop-1d9c78e5",
+    }
+
+
+def test_an_arm_with_no_name_is_left_out_rather_than_guessed():
+    """A failed arm has an error dict, not a result object. Guessing its name
+    would send the lookup at a project that does not exist."""
+    from wayfinder.evals.run import experiment_names
+
+    results = {
+        "baseline": SimpleNamespace(experiment_name="baseline-abc"),
+        "no-skills": {"error": "RuntimeError: rate limited"},
+    }
+    assert experiment_names(results) == {"baseline": "baseline-abc"}
