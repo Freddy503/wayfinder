@@ -26,6 +26,7 @@ from typing import Any, Literal
 from langsmith import traceable
 from pydantic import ValidationError
 
+from wayfinder.tools.geo import haversine_km
 from wayfinder.schema import (
     PACE_ACTIVITY_BOUNDS,
     Day,
@@ -91,6 +92,7 @@ CHECK_DESCRIPTIONS: dict[str, str] = {
     "pace": "Activity count per day is sensible for the stated pace",
     "grounded": "Every venue has a source backing it",
     "no_duplicates": "No venue is scheduled twice",
+    "route_sense": "Each day runs in an order that doesn't double back on itself",
     "hours_known": "Opening hours were actually established, not assumed",
     "flights_grounded": "Flight times and fares cite a source",
 }
@@ -229,6 +231,7 @@ def check_itinerary(spec: TripSpec, itinerary: Itinerary) -> ConstraintReport:
     checks.append(_check_departure_realism(spec, itinerary))
     checks.append(_check_grounded(itinerary, metrics))
     checks.append(_check_duplicates(itinerary))
+    checks.append(_check_route_sense(itinerary, metrics))
     checks.append(_check_hours_known(itinerary))
     checks.append(_check_flights_grounded(itinerary))
 
@@ -823,6 +826,85 @@ def _check_duplicates(itin: Itinerary) -> CheckResult:
                     f"{name!r} is scheduled {len(spots)} times: {'; '.join(spots)}",
                 )
             )
+    return result
+
+
+#: A day backtracks when going via the middle stop costs this much more than
+#: going straight from the first to the last, *and* the extra distance is worth
+#: caring about. Both conditions matter: the ratio alone flags two cafés on the
+#: same street, and the distance alone flags a legitimately spread-out day.
+DETOUR_RATIO = 1.6
+DETOUR_FLOOR_KM = 0.8
+
+
+def _check_route_sense(itin: Itinerary, metrics: dict[str, float]) -> CheckResult:
+    """Does the order of a day make geographic sense?
+
+    Nothing checked this before, and a real plan slipped through because of it:
+    Van Gogh Museum → bike rental in the Vondelpark → Rijksmuseum, 2.61 km of
+    walking between two museums that share a square 310 m apart. Every hard
+    check passed, because `transit_feasible` only asks whether the leg you
+    recorded fits the gap you left. Nothing asked whether the *order* was sane.
+
+    Soft on purpose. A detour can be the point — a bike ride between two museums
+    is a reasonable thing to want — so this must not fail a plan. But it has to
+    be reported, and the agent has to see it mid-run so the repair loop can act.
+
+    Skipped when no triple has coordinates: an itinerary the agent never
+    geocoded is a `grounded` problem, and failing it here would blame the wrong
+    check for the wrong thing.
+    """
+    result = CheckResult("route_sense", "soft")
+    worst = 0.0
+    judged = 0
+
+    for day in itin.days:
+        located = [
+            (item, item.venue.coords)
+            for item in day.items
+            if item.venue is not None and item.venue.coords is not None
+        ]
+        for i in range(len(located) - 2):
+            (first, a), (middle, b), (last, c) = located[i], located[i + 1], located[i + 2]
+            direct = haversine_km(a[0], a[1], c[0], c[1])
+            via = haversine_km(a[0], a[1], b[0], b[1]) + haversine_km(b[0], b[1], c[0], c[1])
+            judged += 1
+
+            detour = via - direct
+            if via > direct * DETOUR_RATIO and detour > DETOUR_FLOOR_KM:
+                worst = max(worst, detour)
+                result.violations.append(
+                    Violation(
+                        "route_sense",
+                        "soft",
+                        f"{first.title} → {middle.title} → {last.title} covers "
+                        f"{via:.1f} km, but {first.title} and {last.title} are only "
+                        f"{direct:.1f} km apart — {detour:.1f} km of backtracking",
+                        where=_where(day, middle),
+                    )
+                )
+
+    if not judged:
+        result.skipped = True
+        result.detail = "too few venues have coordinates to judge the order"
+        return result
+
+    # Counts and a maximum, deliberately — not a sum of distances. Consecutive
+    # triples share a hop (A→B→C and B→C→D both contain B→C), so adding up
+    # every detour double-counts: the Amsterdam run reported 20.6 km of
+    # "avoidable" walking against a trip that only walked about half that.
+    # A count and a worst case are unambiguous and directly actionable.
+    detours = len(result.violations)
+    metrics["detour_count"] = float(detours)
+    metrics["worst_detour_km"] = round(worst, 2)
+    #: Fraction of consecutive triples that go somewhere rather than doubling
+    #: back. Higher is better, like every other score here.
+    metrics["route_efficiency"] = round((judged - detours) / judged, 3)
+
+    result.detail = (
+        f"{judged - detours} of {judged} legs go straight there"
+        + (f", worst detour {worst:.1f} km" if detours else "")
+    )
     return result
 
 

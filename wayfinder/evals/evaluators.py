@@ -92,6 +92,15 @@ schema_valid = _from_metric("schema_valid", "schema_valid")
 must_do_coverage = _from_metric("must_do_coverage", "must_do_coverage")
 grounded_pct = _from_metric("grounded_pct", "grounded_pct")
 
+#: Whether each day runs in an order that goes somewhere. Added after a plan
+#: passed every hard check while walking 2.6 km between two museums 300 m
+#: apart — the checker asked whether each leg fit its gap, never whether the
+#: order made sense. Requires output: a run with no itinerary has no route,
+#: and "no detours" would read as a perfect score.
+route_efficiency = _from_metric(
+    "route_efficiency", "route_efficiency", requires_output=True
+)
+
 #: Inverted so that, like every other score here, higher is better — mixing
 #: directions in one experiment view is how you end up reading a regression as
 #: an improvement.
@@ -186,6 +195,7 @@ CODE_EVALUATORS = [
     transit_feasible,
     must_do_coverage,
     grounded_pct,
+    route_efficiency,
     correctly_refused,
     check_calls,
     tool_calls,

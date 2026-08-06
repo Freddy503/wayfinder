@@ -52,12 +52,29 @@ every venue at once, `venue_ratings` for every sight and restaurant at once, \
    Estimate travel for the hops your itinerary actually makes — consecutive \
    stops, in order. Not every pair of places: a day with six stops has five \
    moves, not fifteen.
-6. Write `itinerary.json`. Exactly that path — the bare filename, at the top \
+6. **Order each day by geography first, then by preference.** You now have \
+coordinates for everything on the shortlist. Look at them before you commit to \
+an order, and group what is close together.
+
+   The failure this prevents, from a real plan: *Van Gogh Museum → bike rental \
+   in the Vondelpark → Rijksmuseum*. Those two museums are 300 m apart, on the \
+   same square. Scheduling anything between them meant crossing the city and \
+   coming back — 2.6 km of walking to cover 300 m.
+
+   Two things within about 500 m belong next to each other unless you have a \
+   reason. If something genuinely has to sit between them — a timed entry, a \
+   restaurant that only takes 13:00 — that is fine, but say so in the item's \
+   `note` so the detour reads as a decision rather than an accident.
+
+   `check_itinerary` reports this under `route_sense`, with the exact triple \
+   and the distance wasted. It is a soft warning, not a failure, so it will not \
+   block you — fix it anyway unless you can name the reason.
+7. Write `itinerary.json`. Exactly that path — the bare filename, at the top \
 of your workspace. Not `/root/itinerary.json`, not in a subdirectory. Your \
 research notes go in `research/`; the itinerary does not.
-7. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
+8. Call `check_itinerary`. Fix what it reports. Call it again. Repeat until it \
 passes, or until you are confident the spec itself is impossible.
-8. Write a short `notes` field summarising the shape of the trip.
+9. Write a short `notes` field summarising the shape of the trip.
 
 After the subagents report, a two-day plan should take a handful of tool calls \
 — three or four batches, a write, a check. If you are on your twentieth \
