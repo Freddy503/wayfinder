@@ -628,6 +628,35 @@ def create_app() -> FastAPI:
             "size": len(text),
         }
 
+    @app.get("/api/runs/{run_id}/photos")
+    def photos(run_id: str) -> dict[str, Any]:
+        """Pictures for the venues in a run's itinerary.
+
+        Enriched here rather than by the agent on purpose. Real effort went
+        into cutting verification turns from 74 to 10; spending a turn per
+        venue on decoration would hand that straight back. Photos are
+        presentation, not planning, and the agent should never be asked to
+        invent an image URL.
+        """
+        from wayfinder.agent import locate_itinerary
+        from wayfinder.tools.photos import photos_for
+
+        path = locate_itinerary(_run_dir_for(run_id))
+        if not path.exists():
+            return {"photos": {}}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"photos": {}}
+
+        venues = [
+            {"name": venue.get("name"), "lat": venue.get("lat"), "lon": venue.get("lon")}
+            for day in payload.get("days") or []
+            for item in day.get("items") or []
+            if isinstance(venue := item.get("venue"), dict) and venue.get("name")
+        ]
+        return {"photos": photos_for(venues)}
+
     @app.get("/api/runs/{run_id}/artifact/{name}")
     def artifact(run_id: str, name: str) -> FileResponse:
         run_dir = _run_dir_for(run_id)

@@ -279,12 +279,20 @@
                   margin-right: 6px; }
   .cardrow { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px;
              scroll-snap-type: x proximity; align-items: stretch; }
-  .jcard { flex: 0 0 240px; scroll-snap-align: start; background: var(--panel-2);
+  .jcard { flex: 0 0 268px; scroll-snap-align: start; background: var(--panel-2);
            border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px;
            cursor: pointer; transition: border-color .15s, transform .15s;
            display: flex; flex-direction: column; gap: 5px; }
   .jcard:hover { border-color: #3d5a8a; transform: translateY(-2px); }
   .jcard.hot { border-color: var(--accent); }
+  /* The photograph. Fixed height so a row of cards stays a row rather than a
+     staircase, and the card grows from 240px to make room for it. */
+  .jcard .shot { margin: -11px -12px 8px; height: 116px; overflow: hidden;
+                 border-radius: 11px 11px 0 0; background: #12151c; flex: none; }
+  .jcard .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* A map tile is a location, not a picture of the place — dim it so it never
+     reads as a photograph of somewhere it isn't. */
+  .jcard .shot.ismap img { opacity: .55; }
   .jcard .when { font-family: var(--mono); font-size: 11px; color: var(--faint); }
   .jcard .title { font-size: 13px; font-weight: 600; line-height: 1.3; }
   .jcard .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: auto; }
@@ -1824,7 +1832,9 @@ function hoursChip(item, dayDate) {
   return { text: ranges.map(r => `${r.open}–${r.close}`).join(", "), cls: "chip hours" };
 }
 
+let currentDay = 0;
 function selectDay(idx) {
+  currentDay = idx;
   document.querySelectorAll(".daytab").forEach((t, i) => t.classList.toggle("on", i === idx));
   dayLayers.forEach((l, i) => {
     if (i === idx) { l.group.addTo(map); fitSafely(l.bounds.pad(0.2), { maxZoom: 15 }); }
@@ -1834,6 +1844,21 @@ function selectDay(idx) {
 }
 
 let journeyData = null;
+let photos = {};
+
+/* Fetched after the plan renders, never before: the cards must not wait on
+   pictures. Re-rendering once they arrive is cheap and keeps time-to-value
+   where it is. */
+async function loadPhotos() {
+  if (!runId) return;
+  try {
+    const data = await (await fetch(`/api/runs/${runId}/photos`)).json();
+    if (!Object.keys(data.photos || {}).length) return;
+    photos = data.photos;
+    if (journeyData) renderCards(currentDay);
+  } catch { /* a plan without pictures is still a plan */ }
+}
+
 function flightCard(f) {
   const card = el("div", "jcard");
   card.style.borderStyle = "dashed";
@@ -1878,10 +1903,26 @@ function renderCards(dayIdx) {
     }
     const card = el("div", "jcard");
     card.id = `jcard-${dayIdx}-${i}`;
+    // A photograph is the difference between a schedule and somewhere you
+    // want to go. Landmarks get a real one; anywhere without an article gets
+    // a map tile of the spot, which is honest rather than a stock image of
+    // "a restaurant".
+    const shot = photos[item.venue?.name];
+    if (shot?.thumbnail) {
+      const frame = el("div", "shot" + (shot.kind === "map" ? " ismap" : ""));
+      const img = el("img");
+      img.src = shot.thumbnail;
+      img.alt = shot.kind === "map" ? `Map showing ${item.venue.name}` : item.venue.name;
+      img.loading = "lazy";
+      // A broken image is worse than none: drop the frame entirely.
+      img.onerror = () => frame.remove();
+      frame.append(img);
+      card.append(frame);
+    }
     card.append(el("div", "when", `${item.start}–${item.end}`));
     card.append(el("div", "title", item.title));
-    if (item.note || item.venue?.address)
-      card.append(el("div", "note", item.note || item.venue.address));
+    const blurb = item.note || shot?.extract || item.venue?.address;
+    if (blurb) card.append(el("div", "note", blurb));
     const chips = el("div", "chips");
     chips.append(el("span", "chip kind-" + item.kind, item.kind === "meal" ? (item.meal_slot || "meal") : item.kind));
     if (item.estimated_cost > 0)
@@ -2137,6 +2178,7 @@ async function loadJourney() {
     if (!res.ok) return;
     renderJourney(await res.json());
     document.body.classList.remove("draft");
+    loadPhotos();
     // Fill the verdict's itinerary/sources panes now that the data exists.
     if (window.__fillPanes) window.__fillPanes();
   } catch (e) { console.warn("journey unavailable:", e); }
@@ -2157,6 +2199,7 @@ async function loadDraft() {
     draftSize = data.size;
     document.body.classList.add("draft");
     renderJourney(data.itinerary);
+    loadPhotos();
   } catch { /* a draft is a bonus; the run is unaffected */ }
 }
 
@@ -2760,6 +2803,7 @@ async function start() {
   $("feed").innerHTML = ""; agents = new Map();
   $("progress").innerHTML = ""; works.clear();
   notes = []; noteShown = null; noteSeen.clear(); renderNotes([]);
+  photos = {}; currentDay = 0;
   $("constraints").innerHTML = ""; $("con-note").textContent = "";
   $("live-card").style.display = "none";
   // Swap the sidebar from "describe a trip" to "here's your trip" — the form
