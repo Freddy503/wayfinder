@@ -248,3 +248,47 @@ def test_an_unknown_split_lists_the_real_ones(monkeypatch):
     result = runner.invoke(app, ["matrix", "--split", "nonsense"])
     assert result.exit_code == 2
     assert "infeasible" in result.output
+
+
+# --------------------------------------------------------------------------
+# The contract LangSmith actually enforces
+# --------------------------------------------------------------------------
+
+
+def test_summary_evaluators_are_accepted_by_langsmith():
+    """Calling them directly proves nothing about whether LangSmith will take
+    them, and my first version failed at exactly this point — after both arms
+    had run. `**_: Any` shows up in the signature as a parameter named `_`,
+    which is outside the supported set, so every experiment died at the
+    summary stage having already spent the runs.
+    """
+    from langsmith.evaluation._runner import _normalize_summary_evaluator
+
+    from wayfinder.evals.evaluators import SUMMARY_EVALUATORS
+
+    for evaluator in SUMMARY_EVALUATORS:
+        _normalize_summary_evaluator(evaluator)      # raises if unacceptable
+
+
+def test_per_case_evaluators_are_accepted_too():
+    """Same check for the thirteen that run on every case. These use `**_`
+    and are fine — the per-case wrapper is more permissive than the summary
+    one — but that is worth pinning rather than assuming."""
+    import langsmith.evaluation.evaluator as evaluator_module
+
+    from wayfinder.evals.evaluators import CODE_EVALUATORS
+
+    for evaluator in CODE_EVALUATORS:
+        evaluator_module.DynamicRunEvaluator(evaluator)
+
+
+def test_no_summary_evaluator_takes_varargs():
+    """The specific shape that broke it, pinned so it cannot come back."""
+    import inspect
+
+    from wayfinder.evals.evaluators import SUMMARY_EVALUATORS
+
+    supported = {"runs", "examples", "inputs", "outputs", "reference_outputs"}
+    for evaluator in SUMMARY_EVALUATORS:
+        names = set(inspect.signature(evaluator).parameters)
+        assert names <= supported, f"{evaluator.__name__} takes {names - supported}"

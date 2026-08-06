@@ -314,7 +314,7 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def crash_free_rate(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+def crash_free_rate(outputs: list[dict], reference_outputs: list[dict]):
     """Fraction of cases that produced a validated itinerary at all.
 
     Separated from `plan_passes` because the two failure modes want different
@@ -328,7 +328,7 @@ def crash_free_rate(outputs: list[dict], reference_outputs: list[dict], **_: Any
     }
 
 
-def refusal_accuracy(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+def refusal_accuracy(outputs: list[dict], reference_outputs: list[dict]):
     """`correctly_refused`, but only over the cases that should be refused.
 
     The per-case version is scored on all twenty so an agent that refuses
@@ -347,7 +347,7 @@ def refusal_accuracy(outputs: list[dict], reference_outputs: list[dict], **_: An
     return {"key": "refusal_accuracy", "score": _mean(scored)}
 
 
-def median_verification_calls(outputs: list[dict], reference_outputs: list[dict], **_: Any):
+def median_verification_calls(outputs: list[dict], reference_outputs: list[dict]):
     """Median rather than mean: one runaway case would otherwise set the number.
 
     This is the column the batch tools were built to move, so it wants to
